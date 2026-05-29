@@ -3,32 +3,29 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
-from dotenv import load_dotenv
-import dj_database_url
+import environ
 
+env = environ.Env()
+environ.Env.read_env()
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
-load_dotenv(BASE_DIR / ".env")
 
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()
+ENVIRONMENT = env.str("ENVIRONMENT", "development").strip().lower()
 IS_TEST_RUN = "test" in sys.argv
 
 
 def get_bool_env(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
+    value = env.bool(name, default)
+    return value
 
 def get_list_env(name: str, default: str = "") -> list[str]:
-    raw_value = os.getenv(name, default)
+    raw_value = env.str(name, default)
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
 def get_env_alias(*names: str, default=None):
     for name in names:
-        value = os.getenv(name)
+        value = env.str(name, default)
         if value is not None and value != "":
             return value
     return default
@@ -37,10 +34,10 @@ def get_env_alias(*names: str, default=None):
 def build_simple_jwt(signing_key: str) -> dict:
     return {
         "ACCESS_TOKEN_LIFETIME": timedelta(
-            minutes=int(os.getenv("ACCESS_TOKEN_MINUTES", "15"))
+            minutes=int(env.str("ACCESS_TOKEN_MINUTES", "15"))
         ),
         "REFRESH_TOKEN_LIFETIME": timedelta(
-            days=int(os.getenv("REFRESH_TOKEN_DAYS", "7"))
+            days=int(env.str("REFRESH_TOKEN_DAYS", "7"))
         ),
         "ROTATE_REFRESH_TOKENS": True,
         "BLACKLIST_AFTER_ROTATION": True,
@@ -99,18 +96,21 @@ TEMPLATES = [
 WSGI_APPLICATION = "codebase_analyzer_back_end.wsgi.application"
 ASGI_APPLICATION = "codebase_analyzer_back_end.asgi.application"
 
-database_engine = os.getenv("DB_ENGINE", "django.db.backends.postgresql")
-database_url = os.environ.get("DATABASE_URL")
-ssl_require = database_engine == "django.db.backends.postgresql"
-if database_url and database_url.startswith("sqlite"):
-    ssl_require = False
-
+# database_engine = env.str("DB_ENGINE", "django.db.backends.postgresql")
+# database_url = env.str("DATABASE_URL")
+# ssl_require = database_engine == "django.db.backends.postgresql"
+# if database_url and database_url.startswith("sqlite"):
+#     ssl_require = False
 DATABASES = {
-    "default": dj_database_url.config(
-        default=database_url,
-        conn_max_age=600,
-        ssl_require=ssl_require,
-    )
+    "default": {
+        "ENGINE": env.str("DB_ENGINE", "django.db.backends.postgresql"),
+        "NAME": env.str("DB_NAME", ""),
+        "USER": env.str("DB_USER", ""),
+        "PASSWORD": env.str("DB_PASSWORD", ""),
+        "HOST": env.str("DB_HOST", ""),
+        "PORT": env.str("DB_PORT", ""),
+        "OPTIONS": {"sslmode": "require"},
+    }
 }
 
 if DATABASES["default"].get("ENGINE") in ["django.db.backends.postgresql", "django.db.backends.postgis"]:
@@ -126,7 +126,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = os.getenv("TIME_ZONE", "UTC")
+TIME_ZONE = env.str("TIME_ZONE", "UTC")
 USE_I18N = True
 USE_TZ = True
 
@@ -146,7 +146,7 @@ else:
     CACHES = {
         "default": {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
-            "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/1"),
+            "LOCATION": env.str("REDIS_URL", "redis://redis:6379/1"),
             "TIMEOUT": 300,
         }
     }
@@ -184,7 +184,7 @@ REST_FRAMEWORK = {
 # EMAIL_USE_TLS = get_bool_env("EMAIL_USE_TLS", get_bool_env("SMTP_USE_TLS", True))
 # EMAIL_USE_SSL = get_bool_env("EMAIL_USE_SSL", get_bool_env("SMTP_USE_SSL", False))
 # DEFAULT_FROM_EMAIL = get_env_alias("DEFAULT_FROM_EMAIL", default="no-reply@example.com")
-PASSWORD_RESET_FRONTEND_URL = os.getenv(
+PASSWORD_RESET_FRONTEND_URL = env.str(
     "PASSWORD_RESET_FRONTEND_URL",
     "http://localhost:3000/reset-password",
 )
