@@ -4,7 +4,7 @@ from .base import *
 
 
 DEBUG = get_bool_env("DEBUG", True)
-SECRET_KEY = os.getenv("SECRET_KEY", "unsafe-development-secret-key")
+SECRET_KEY = os.getenv("SECRET_KEY", "unsafe-development-secret-key-with-32-chars")
 ALLOWED_HOSTS = get_list_env("ALLOWED_HOSTS", "localhost,127.0.0.1")
 CSRF_TRUSTED_ORIGINS = get_list_env(
     "CSRF_TRUSTED_ORIGINS",

@@ -1,0 +1,5 @@
+Hi {{ user.first_name|default:user.email }},
+
+Welcome to Codebase Analyzer. Your account has been created successfully.
+
+If you did not create this account, please contact support immediately.

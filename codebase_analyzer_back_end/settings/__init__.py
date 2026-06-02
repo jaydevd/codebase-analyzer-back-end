@@ -5,7 +5,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()
-
+print(f"Loading settings for ENVIRONMENT='{ENVIRONMENT}'")
 SETTINGS_MODULES = {
     "development": "codebase_analyzer_back_end.settings.development",
     "staging": "codebase_analyzer_back_end.settings.staging",
