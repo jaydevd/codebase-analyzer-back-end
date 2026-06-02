@@ -4,15 +4,14 @@ from datetime import timedelta
 from pathlib import Path
 
 import environ
-
-env = environ.Env()
-environ.Env.read_env()
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-ENVIRONMENT = env.str("ENVIRONMENT", "development").strip().lower()
-IS_TEST_RUN = "test" in sys.argv
+env = environ.Env()
+environ.Env.read_env(str(BASE_DIR / ".env"))
 
+ENVIRONMENT = env.str("ENVIRONMENT", "development").strip().lower()
 
 def get_bool_env(name: str, default: bool = False) -> bool:
     value = env.bool(name, default)
@@ -62,6 +61,8 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
+    "common",
+    "auth.apps.AuthConfig",
 ]
 
 MIDDLEWARE = [
@@ -101,6 +102,7 @@ ASGI_APPLICATION = "codebase_analyzer_back_end.asgi.application"
 # ssl_require = database_engine == "django.db.backends.postgresql"
 # if database_url and database_url.startswith("sqlite"):
 #     ssl_require = False
+print("db name:", env.str("DB_NAME", ""))
 DATABASES = {
     "default": {
         "ENGINE": env.str("DB_ENGINE", "django.db.backends.postgresql"),
@@ -134,22 +136,15 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-AUTH_USER_MODEL = "auth.User"
+AUTH_USER_MODEL = "user_auth.User"
 
-if IS_TEST_RUN:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        }
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": env.str("REDIS_URL", "redis://redis:6379/1"),
+        "TIMEOUT": 300,
     }
-else:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
-            "LOCATION": env.str("REDIS_URL", "redis://redis:6379/1"),
-            "TIMEOUT": 300,
-        }
-    }
+}
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -169,21 +164,36 @@ REST_FRAMEWORK = {
     # "EXCEPTION_HANDLER": "codebase_analyzer_back_end.exceptions.custom_exception_handler",
 }
 
-# EMAIL_BACKEND = get_env_alias(
-#     "EMAIL_BACKEND",
-#     default=(
-#         "django.core.mail.backends.locmem.EmailBackend"
-#         if IS_TEST_RUN
-#         else "django.core.mail.backends.smtp.EmailBackend"
-#     ),
-# )
-# EMAIL_HOST = get_env_alias("EMAIL_HOST", "SMTP_HOST", default="smtp-relay.brevo.com")
-# EMAIL_PORT = int(get_env_alias("EMAIL_PORT", "SMTP_PORT", default="587"))
-# EMAIL_HOST_USER = get_env_alias("EMAIL_HOST_USER", "SMTP_USERNAME", default="")
-# EMAIL_HOST_PASSWORD = get_env_alias("EMAIL_HOST_PASSWORD", "SMTP_PASSWORD", default="")
-# EMAIL_USE_TLS = get_bool_env("EMAIL_USE_TLS", get_bool_env("SMTP_USE_TLS", True))
-# EMAIL_USE_SSL = get_bool_env("EMAIL_USE_SSL", get_bool_env("SMTP_USE_SSL", False))
-# DEFAULT_FROM_EMAIL = get_env_alias("DEFAULT_FROM_EMAIL", default="no-reply@example.com")
+EMAIL_HOST = get_env_alias("EMAIL_HOST", default="smtp-relay.brevo.com")
+EMAIL_PORT = int(get_env_alias("EMAIL_PORT", default="587"))
+EMAIL_HOST_USER = get_env_alias("EMAIL_HOST_USER", "BREVO_SMTP_USERNAME", default="")
+EMAIL_HOST_PASSWORD = get_env_alias(
+    "EMAIL_HOST_PASSWORD",
+    "BREVO_SMTP_PASSWORD",
+    default="",
+)
+EMAIL_USE_TLS = get_bool_env("EMAIL_USE_TLS", True)
+EMAIL_USE_SSL = get_bool_env("EMAIL_USE_SSL", False)
+DEFAULT_EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+if ENVIRONMENT == "development" and not (EMAIL_HOST_USER and EMAIL_HOST_PASSWORD):
+    DEFAULT_EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+EMAIL_BACKEND = get_env_alias("EMAIL_BACKEND", default=DEFAULT_EMAIL_BACKEND)
+if (
+    EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"
+    and (not EMAIL_HOST_USER or not EMAIL_HOST_PASSWORD)
+):
+    raise ImproperlyConfigured(
+        "SMTP email requires credentials. Set EMAIL_HOST_USER/EMAIL_HOST_PASSWORD "
+        "or BREVO_SMTP_USERNAME/BREVO_SMTP_PASSWORD."
+    )
+
+DEFAULT_FROM_EMAIL = get_env_alias(
+    "DEFAULT_FROM_EMAIL",
+    default=EMAIL_HOST_USER or "no-reply@example.com",
+)
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+EMAIL_TIMEOUT = int(get_env_alias("EMAIL_TIMEOUT", default="30"))
 PASSWORD_RESET_FRONTEND_URL = env.str(
     "PASSWORD_RESET_FRONTEND_URL",
     "http://localhost:3000/reset-password",
@@ -197,6 +207,13 @@ SPECTACULAR_SETTINGS = {
     "COMPONENT_SPLIT_REQUEST": True,
 }
 
+SIMPLE_JWT = build_simple_jwt(
+    env.str(
+        "JWT_SIGNING_KEY",
+        env.str("SECRET_KEY", "unsafe-development-secret-key-with-32-chars"),
+    )
+)
+
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = True
@@ -204,16 +221,16 @@ X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_BROWSER_XSS_FILTER = True
 
-if IS_TEST_RUN:
-    PASSWORD_HASHERS = [
-        "django.contrib.auth.hashers.MD5PasswordHasher",
-    ]
+# if IS_TEST_RUN:
+#     PASSWORD_HASHERS = [
+#         "django.contrib.auth.hashers.MD5PasswordHasher",
+#     ]
 
-    class DisableMigrations(dict):
-        def __contains__(self, item):
-            return True
+#     class DisableMigrations(dict):
+#         def __contains__(self, item):
+#             return True
 
-        def __getitem__(self, item):
-            return None
+#         def __getitem__(self, item):
+#             return None
 
-    MIGRATION_MODULES = DisableMigrations()
+#     MIGRATION_MODULES = DisableMigrations()
