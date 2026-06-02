@@ -1,42 +1,67 @@
 import os
-import sys
 from datetime import timedelta
 from pathlib import Path
 
-import environ
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-env = environ.Env()
-environ.Env.read_env(str(BASE_DIR / ".env"))
+def load_dotenv_file(env_path: Path) -> None:
+    if not env_path.exists():
+        return
 
-ENVIRONMENT = env.str("ENVIRONMENT", "development").strip().lower()
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+
+        cleaned_value = value.strip()
+        if len(cleaned_value) >= 2 and cleaned_value[0] == cleaned_value[-1] and cleaned_value[0] in {"'", '"'}:
+            cleaned_value = cleaned_value[1:-1]
+        os.environ[key] = cleaned_value
+
+
+def get_env(name: str, default: str | None = None) -> str | None:
+    return os.getenv(name, default)
+
 
 def get_bool_env(name: str, default: bool = False) -> bool:
-    value = env.bool(name, default)
-    return value
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
 
 def get_list_env(name: str, default: str = "") -> list[str]:
-    raw_value = env.str(name, default)
+    raw_value = os.getenv(name, default)
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
 def get_env_alias(*names: str, default=None):
     for name in names:
-        value = env.str(name, default)
+        value = os.getenv(name, default)
         if value is not None and value != "":
             return value
     return default
 
 
+load_dotenv_file(BASE_DIR / ".env")
+
+ENVIRONMENT = get_env("ENVIRONMENT", "development").strip().lower()
+
+
 def build_simple_jwt(signing_key: str) -> dict:
     return {
         "ACCESS_TOKEN_LIFETIME": timedelta(
-            minutes=int(env.str("ACCESS_TOKEN_MINUTES", "15"))
+            minutes=int(get_env("ACCESS_TOKEN_MINUTES", "15"))
         ),
         "REFRESH_TOKEN_LIFETIME": timedelta(
-            days=int(env.str("REFRESH_TOKEN_DAYS", "7"))
+            days=int(get_env("REFRESH_TOKEN_DAYS", "7"))
         ),
         "ROTATE_REFRESH_TOKENS": True,
         "BLACKLIST_AFTER_ROTATION": True,
@@ -97,20 +122,14 @@ TEMPLATES = [
 WSGI_APPLICATION = "codebase_analyzer_back_end.wsgi.application"
 ASGI_APPLICATION = "codebase_analyzer_back_end.asgi.application"
 
-# database_engine = env.str("DB_ENGINE", "django.db.backends.postgresql")
-# database_url = env.str("DATABASE_URL")
-# ssl_require = database_engine == "django.db.backends.postgresql"
-# if database_url and database_url.startswith("sqlite"):
-#     ssl_require = False
-print("db name:", env.str("DB_NAME", ""))
 DATABASES = {
     "default": {
-        "ENGINE": env.str("DB_ENGINE", "django.db.backends.postgresql"),
-        "NAME": env.str("DB_NAME", ""),
-        "USER": env.str("DB_USER", ""),
-        "PASSWORD": env.str("DB_PASSWORD", ""),
-        "HOST": env.str("DB_HOST", ""),
-        "PORT": env.str("DB_PORT", ""),
+        "ENGINE": get_env("DB_ENGINE", "django.db.backends.postgresql"),
+        "NAME": get_env("DB_NAME", ""),
+        "USER": get_env("DB_USER", ""),
+        "PASSWORD": get_env("DB_PASSWORD", ""),
+        "HOST": get_env("DB_HOST", ""),
+        "PORT": get_env("DB_PORT", ""),
         "OPTIONS": {"sslmode": "require"},
     }
 }
@@ -128,7 +147,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = env.str("TIME_ZONE", "UTC")
+TIME_ZONE = get_env("TIME_ZONE", "UTC")
 USE_I18N = True
 USE_TZ = True
 
@@ -141,7 +160,7 @@ AUTH_USER_MODEL = "user_auth.User"
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": env.str("REDIS_URL", "redis://redis:6379/1"),
+        "LOCATION": get_env("REDIS_URL", "redis://redis:6379/1"),
         "TIMEOUT": 300,
     }
 }
@@ -194,7 +213,7 @@ DEFAULT_FROM_EMAIL = get_env_alias(
 )
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 EMAIL_TIMEOUT = int(get_env_alias("EMAIL_TIMEOUT", default="30"))
-PASSWORD_RESET_FRONTEND_URL = env.str(
+PASSWORD_RESET_FRONTEND_URL = get_env(
     "PASSWORD_RESET_FRONTEND_URL",
     "http://localhost:3000/reset-password",
 )
@@ -208,9 +227,9 @@ SPECTACULAR_SETTINGS = {
 }
 
 SIMPLE_JWT = build_simple_jwt(
-    env.str(
+    get_env(
         "JWT_SIGNING_KEY",
-        env.str("SECRET_KEY", "unsafe-development-secret-key-with-32-chars"),
+        get_env("SECRET_KEY", "unsafe-development-secret-key-with-32-chars"),
     )
 )
 
