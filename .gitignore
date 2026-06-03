@@ -42,3 +42,7 @@ pip-wheel-metadata/
 .vscode/
 postman
 .postman
+
+# secrets and keys
+secrets
+*.pem
