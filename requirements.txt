@@ -9,7 +9,7 @@ gunicorn==26.0.0
 python-dotenv==1.2.2
 
 # Data and infrastructure
-psycopg[binary]==3.2.9
+psycopg[binary]==3.2.13
 redis==7.4.0
 
 # AI and retrieval stack
