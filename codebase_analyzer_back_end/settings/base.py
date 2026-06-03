@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from typing import Optional
 
 from django.core.exceptions import ImproperlyConfigured
 
@@ -26,7 +27,7 @@ def load_dotenv_file(env_path: Path) -> None:
         os.environ[key] = cleaned_value
 
 
-def get_env(name: str, default: str | None = None) -> str | None:
+def get_env(name: str, default: Optional[str] = None) -> Optional[str]:
     return os.getenv(name, default)
 
 
