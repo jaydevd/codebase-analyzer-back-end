@@ -89,6 +89,8 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "common",
     "auth.apps.AuthConfig",
+    "github",
+    "services"
 ]
 
 MIDDLEWARE = [
@@ -218,6 +220,13 @@ PASSWORD_RESET_FRONTEND_URL = get_env(
     "PASSWORD_RESET_FRONTEND_URL",
     "http://localhost:3000/reset-password",
 )
+
+GITHUB_APP_ID = get_env("GITHUB_APP_ID", "")
+GITHUB_APP_SLUG = get_env("GITHUB_APP_SLUG", "")
+GITHUB_PRIVATE_KEY = get_env("GITHUB_PRIVATE_KEY", "")
+GITHUB_PRIVATE_KEY_PATH = get_env("GITHUB_PRIVATE_KEY_PATH", "")
+GITHUB_WEBHOOK_SECRET = get_env("GITHUB_WEBHOOK_SECRET", "")
+FRONTEND_URL = get_env("FRONTEND_URL", "http://localhost:5173")
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Product And Order Management API",
