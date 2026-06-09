@@ -7,15 +7,13 @@ class GitHubCallbackQuerySerializer(serializers.Serializer):
     setup_action = serializers.CharField(required=False, allow_blank=True)
 
 
-class GitHubRepositorySelectionItemSerializer(serializers.Serializer):
-    id = serializers.IntegerField()
-    full_name = serializers.CharField()
-    name = serializers.CharField()
-    private = serializers.BooleanField()
+# class GitHubRepositorySelectionItemSerializer(serializers.Serializer):
+#     id = serializers.IntegerField()
+#     full_name = serializers.CharField()
+#     name = serializers.CharField()
+#     private = serializers.BooleanField()
 
 
-class GitHubRepositorySelectionSerializer(serializers.Serializer):
-    repositories = serializers.ListSerializer(
-        child=GitHubRepositorySelectionItemSerializer(),
-        min_length=1,
-    )
+class DownloadRepoSerializer(serializers.Serializer):
+    branch = serializers.CharField(required=False, allow_blank=True, default="main")
+    repo_id = serializers.IntegerField(required=True)

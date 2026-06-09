@@ -3,19 +3,20 @@ from django.urls import path
 from github.views import (
     GitHubCallbackView,
     GitHubInstallUrlView,
-    GitHubRepositoriesView,
-    GitHubRepositorySelectionView,
+    ListReposView,
+    # GitHubRepositorySelectionView,
     GitHubWebhookView,
+    DownloadRepo
 )
 
 urlpatterns = [
     path("install-url/", GitHubInstallUrlView.as_view(), name="github-install-url"),
     path("callback/", GitHubCallbackView.as_view(), name="github-callback"),
-    path("repositories/", GitHubRepositoriesView.as_view(), name="github-repositories"),
+    path("repos/", ListReposView.as_view(), name="github-repos"),
     path(
-        "repositories/select/",
-        GitHubRepositorySelectionView.as_view(),
-        name="github-repository-selection",
+        "repos/download/",
+        DownloadRepo.as_view(),
+        name="github-repo-download",
     ),
     path("webhook/", GitHubWebhookView.as_view(), name="github-webhook"),
 ]

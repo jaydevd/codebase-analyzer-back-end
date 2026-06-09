@@ -51,7 +51,7 @@ class GitHubAppService:
             headers={
                 "Authorization": f"Bearer {app_jwt}",
                 "Accept": "application/vnd.github+json",
-                "User-Agent": "Codebase Analyzer",
+                "User-Agent": settings.GITHUB_APP_SLUG,
             },
         )
         response.raise_for_status()
@@ -64,7 +64,7 @@ class GitHubAppService:
             headers={
                 "Authorization": f"Bearer {app_jwt}",
                 "Accept": "application/vnd.github+json",
-                "User-Agent": "Codebase Analyzer",
+                "User-Agent": settings.GITHUB_APP_SLUG,
             },
         )
         response.raise_for_status()
@@ -77,7 +77,7 @@ class GitHubAppService:
             headers={
                 "Authorization": f"token {installation_token}",
                 "Accept": "application/vnd.github+json",
-                "User-Agent": "Codebase Analyzer",
+                "User-Agent": settings.GITHUB_APP_SLUG,
             },
             params={"per_page": 100},
         )
@@ -99,3 +99,20 @@ class GitHubAppService:
 
         mac = hmac.new(secret.encode("utf-8"), msg=raw_body, digestmod=hashlib.sha256)
         return hmac.compare_digest(mac.hexdigest(), signature)
+    
+    def download_repository(self, owner: str, repo: str, branch: str = "main", installation_token: str = None) -> None:
+
+        response = requests.get(
+            f"{GITHUB_BASE_URL}/repos/{owner}/{repo}/zipball/{branch}",
+            headers={
+                "Authorization": f"token {installation_token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": settings.GITHUB_APP_SLUG,
+            },
+        )
+        response.raise_for_status()
+        
+        # Here you would implement the logic to clone the repository using the clone_url and branch.
+        # This is a placeholder for the actual cloning logic, which might involve using GitPython or subprocess to call git.
+        # For example:
+        # git.Repo.clone_from(clone_url, local_path, branch=branch)

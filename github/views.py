@@ -8,16 +8,16 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from requests.exceptions import RequestException
 
+from auth.models import User
 from common.responses import error_response, success_response
-from github.models import (
-    GitHubInstallation,
-    GitHubInstallationState,
-    GitHubRepositorySelection,
-)
+# from github.models import (
+#     GitHubInstallation,
+#     GitHubInstallationState,
+# )
 from github.services.github_app import GitHubAppService
 from github.serializers import (
     GitHubCallbackQuerySerializer,
-    GitHubRepositorySelectionSerializer,
+    DownloadRepoSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,10 @@ service = GitHubAppService()
 
 
 class GitHubInstallUrlView(APIView):
+    """
+    Generates the GitHub App installation URL for the authenticated user.
+    This will give us permission to access the user's repositories based on the permissions granted during installation.
+    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -35,7 +39,9 @@ class GitHubInstallUrlView(APIView):
             )
 
         state = secrets.token_urlsafe(32)
-        GitHubInstallationState.objects.create(user=request.user, state=state)
+        print("request.user.id:", request.user.id)
+
+        User.objects.filter(id=request.user.id).update(github_installation_state=state)
         install_url = (
             f"https://github.com/apps/{settings.GITHUB_APP_SLUG}/installations/new?state={state}"
         )
@@ -43,6 +49,12 @@ class GitHubInstallUrlView(APIView):
 
 
 class GitHubCallbackView(APIView):
+    """
+    Handles the callback from GitHub after the user installs the app.
+    This will give access to the user's repositories based on the user permissions.
+    Take installation_id and installation token from the response after successful installation
+    and use the installation token for further API requests for user's repositories and other details.
+    """
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -51,17 +63,16 @@ class GitHubCallbackView(APIView):
 
         state = serializer.validated_data["state"]
         installation_id = serializer.validated_data["installation_id"]
-        GitHubInstallationState.objects.filter(state=state, used=True).delete()
 
-        state_record = GitHubInstallationState.objects.filter(state=state, used=False).select_related("user").first()
-        if not state_record:
-            return error_response(
-                "Invalid or expired GitHub callback state.",
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
+        # state_record = GitHubInstallationState.objects.filter(state=state, used=False).select_related("user").first()
+        # if not state_record:
+        #     return error_response(
+        #         "Invalid or expired GitHub callback state.",
+        #         status_code=status.HTTP_400_BAD_REQUEST,
+        #     )
 
-        state_record.used = True
-        state_record.save(update_fields=["used"])
+        # state_record.used = True
+        # state_record.save(update_fields=["used"])
 
         try:
             installation_details = service.get_installation_details(installation_id)
@@ -73,23 +84,35 @@ class GitHubCallbackView(APIView):
             )
 
         account = installation_details.get("account", {})
-        account_login = account.get("login", "")
-        account_type = account.get("type", "")
+        print("account details", account)
 
-        GitHubInstallation.objects.update_or_create(
-            user=state_record.user,
-            defaults={
-                "installation_id": installation_id,
-                "account_login": account_login,
-                "account_type": account_type,
-            },
+        # account_login = account.get("login", "")
+        # account_type = account.get("type", "")
+
+        # GitHubInstallation.objects.update_or_create(
+        #     user=state_record.user,
+        #     defaults={
+        #         "installation_id": installation_id,
+        #         "account_login": account_login,
+        #         "account_type": account_type,
+        #     },
+        # )
+        github_username=account.get("login", "")
+        print("installation_id: ", installation_id)
+
+        User.objects.filter(github_installation_state=state).update(
+            github_username=github_username,
+            github_installation_id=installation_id,
         )
 
         redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/github/success"
         return redirect(redirect_url)
 
 
-class GitHubRepositoriesView(APIView):
+class ListReposView(APIView):
+    """
+    Fetches the list of repositories accessible to the authenticated user based on their GitHub App installation.
+    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -124,42 +147,45 @@ class GitHubRepositoriesView(APIView):
         return success_response("GitHub repositories fetched successfully.", data=formatted)
 
 
-class GitHubRepositorySelectionView(APIView):
-    permission_classes = [IsAuthenticated]
+# class GitHubRepositorySelectionView(APIView):
+#     permission_classes = [IsAuthenticated]
 
-    def post(self, request):
-        serializer = GitHubRepositorySelectionSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+#     def post(self, request):
+#         serializer = GitHubRepositorySelectionSerializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
 
-        installation = getattr(request.user, "github_installation", None)
-        if not installation:
-            return error_response(
-                "No GitHub installation is associated with the current user.",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
+#         installation = getattr(request.user, "github_installation", None)
+#         if not installation:
+#             return error_response(
+#                 "No GitHub installation is associated with the current user.",
+#                 status_code=status.HTTP_404_NOT_FOUND,
+#             )
 
-        selections = serializer.validated_data["repositories"]
-        GitHubRepositorySelection.objects.filter(installation=installation).delete()
+#         selections = serializer.validated_data["repositories"]
+#         GitHubRepositorySelection.objects.filter(installation=installation).delete()
 
-        created_objects = [
-            GitHubRepositorySelection(
-                installation=installation,
-                repository_id=item["id"],
-                name=item["name"],
-                full_name=item["full_name"],
-                private=item["private"],
-            )
-            for item in selections
-        ]
-        GitHubRepositorySelection.objects.bulk_create(created_objects)
+#         created_objects = [
+#             GitHubRepositorySelection(
+#                 installation=installation,
+#                 repository_id=item["id"],
+#                 name=item["name"],
+#                 full_name=item["full_name"],
+#                 private=item["private"],
+#             )
+#             for item in selections
+#         ]
+#         GitHubRepositorySelection.objects.bulk_create(created_objects)
 
-        return success_response(
-            "Repository selection saved successfully.",
-            data={"selected_count": len(created_objects)},
-        )
+#         return success_response(
+#             "Repository selection saved successfully.",
+#             data={"selected_count": len(created_objects)},
+#         )
 
 
 class GitHubWebhookView(APIView):
+    """
+    Handles incoming GitHub webhook events. Verifies the signature and processes events like installation, repository selection, and push events.
+    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -175,7 +201,11 @@ class GitHubWebhookView(APIView):
             )
 
         event = request.headers.get("X-GitHub-Event", "")
+        print("event:", event)
+
         payload = request.data
+        print("payload: ", payload)
+
         logger.info(
             "GitHub webhook received event=%s installation_id=%s action=%s",
             event,
@@ -185,15 +215,32 @@ class GitHubWebhookView(APIView):
 
         handler_name = f"handle_{event.replace('-', '_')}"
         handler = getattr(self, handler_name, self.handle_default)
+        print("handler: ", handler)
+
         return handler(payload)
 
     def handle_installation(self, payload):
         installation = payload.get("installation", {})
         action = payload.get("action")
         installation_id = installation.get("id")
+        print("installation_id:", installation_id)
+
+        if action == "created":
+
+            installation_token = service.get_installation_token(installation_id)
+            # repos = service.get_installation_repositories(self, installation_id)
+
+            User.objects.filter(github_installation_id=installation_id).update(
+                github_installation_access_token=installation_token,
+                is_github_installation_active=True
+            )
 
         if action == "deleted" and installation_id:
-            GitHubInstallation.objects.filter(installation_id=installation_id).delete()
+            User.object.filter(github_installation_id=installation_id).update(
+                github_installation_access_token=None,
+                github_installation_state=None,
+                is_github_installation_active=False
+            )
             logger.info("Deleted GitHub installation %s after webhook installation.deleted", installation_id)
 
         return success_response("GitHub installation event processed.")
@@ -209,3 +256,41 @@ class GitHubWebhookView(APIView):
 
     def handle_default(self, payload):
         return success_response("GitHub webhook received.")
+
+class DownloadRepo(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = DownloadRepoSerializer
+
+    def post(self, request):
+        installation = getattr(request.user, "github_installation", None)
+        if not installation:
+            return error_response(
+                "GitHub installation has not been completed for the current user.",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            serializer = self.serializer_class(data=request.data)
+            if not serializer.is_valid():
+                return error_response(
+                    "Invalid request data.",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            repo_id = serializer.validated_data.get("repo_id")
+            branch = serializer.validated_data.get("branch")
+
+            # donwnload the repository using the installation token and repo_id
+            service.download_repository(installation.installation_id, repo_id, branch)
+
+            # repositories = service.get_installation_repositories(installation.installation_id)
+        except RequestException:
+            logger.exception(
+                "Failed to fetch GitHub repositories for installation %s",
+                installation.installation_id,
+            )
+            return error_response(
+                "Unable to retrieve GitHub repositories.",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return success_response("GitHub repo downloaded successfully.")
