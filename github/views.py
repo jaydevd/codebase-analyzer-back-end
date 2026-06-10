@@ -116,19 +116,29 @@ class ListReposView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        installation = getattr(request.user, "github_installation", None)
-        if not installation:
+        user_email=request.user
+        user = User.objects.get(email=user_email)
+
+        if not user:
             return error_response(
-                "GitHub installation has not been completed for the current user.",
+                "user not found.",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        is_github_installation_active = user.is_github_installation_active
+        installation_id = user.github_installation_id
+
+        if not is_github_installation_active:
+            return error_response(
+                "Github installation is incomplete for this user.",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
 
         try:
-            repositories = service.get_installation_repositories(installation.installation_id)
+            repositories = service.get_installation_repositories(installation_id)
         except RequestException:
             logger.exception(
                 "Failed to fetch GitHub repositories for installation %s",
-                installation.installation_id,
+                installation_id,
             )
             return error_response(
                 "Unable to retrieve GitHub repositories.",
@@ -262,8 +272,18 @@ class DownloadRepo(APIView):
     serializer_class = DownloadRepoSerializer
 
     def post(self, request):
-        installation = getattr(request.user, "github_installation", None)
-        if not installation:
+        user = User.objects.get(email=request.user)
+
+        if not user:
+            return error_response(
+                "User not found.",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        
+        is_github_installation_active = user.is_github_installation_active
+        installation_id = user.github_installation_id
+
+        if not is_github_installation_active:
             return error_response(
                 "GitHub installation has not been completed for the current user.",
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -276,20 +296,21 @@ class DownloadRepo(APIView):
                     "Invalid request data.",
                     status_code=status.HTTP_400_BAD_REQUEST,
                 )
-            repo_id = serializer.validated_data.get("repo_id")
+
             branch = serializer.validated_data.get("branch")
+            repo_full_name = serializer.validated_data.get("repo_full_name")
 
             # donwnload the repository using the installation token and repo_id
-            service.download_repository(installation.installation_id, repo_id, branch)
+            service.download_repository(repo_full_name, installation_id, branch)
 
             # repositories = service.get_installation_repositories(installation.installation_id)
         except RequestException:
             logger.exception(
-                "Failed to fetch GitHub repositories for installation %s",
-                installation.installation_id,
+                "Failed to download repo for installation %s",
+                installation_id,
             )
             return error_response(
-                "Unable to retrieve GitHub repositories.",
+                "Unable to download github repo.",
                 status_code=status.HTTP_502_BAD_GATEWAY,
             )
 

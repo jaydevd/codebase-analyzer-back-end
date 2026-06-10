@@ -100,10 +100,10 @@ class GitHubAppService:
         mac = hmac.new(secret.encode("utf-8"), msg=raw_body, digestmod=hashlib.sha256)
         return hmac.compare_digest(mac.hexdigest(), signature)
     
-    def download_repository(self, owner: str, repo: str, branch: str = "main", installation_token: str = None) -> None:
-
+    def download_repository(self, repo: str, installation_id: int, branch: str = "main") -> None:
+        installation_token = self.get_installation_token(installation_id)
         response = requests.get(
-            f"{GITHUB_BASE_URL}/repos/{owner}/{repo}/zipball/{branch}",
+            f"{GITHUB_BASE_URL}/repos/{repo}/zipball/{branch}",
             headers={
                 "Authorization": f"token {installation_token}",
                 "Accept": "application/vnd.github+json",

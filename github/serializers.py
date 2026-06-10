@@ -16,4 +16,4 @@ class GitHubCallbackQuerySerializer(serializers.Serializer):
 
 class DownloadRepoSerializer(serializers.Serializer):
     branch = serializers.CharField(required=False, allow_blank=True, default="main")
-    repo_id = serializers.IntegerField(required=True)
+    repo_full_name = serializers.CharField(required=True)

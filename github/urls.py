@@ -14,7 +14,7 @@ urlpatterns = [
     path("callback/", GitHubCallbackView.as_view(), name="github-callback"),
     path("repos/", ListReposView.as_view(), name="github-repos"),
     path(
-        "repos/download/",
+        "repo/download/",
         DownloadRepo.as_view(),
         name="github-repo-download",
     ),
