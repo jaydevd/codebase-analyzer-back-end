@@ -1,1 +1,4 @@
 GITHUB_BASE_URL="https://api.github.com"
+VOYAGE_API_KEY=""
+QDRANT_URL=""
+QDRANT_API_KEY=""

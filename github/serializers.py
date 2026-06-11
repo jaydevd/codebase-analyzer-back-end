@@ -1,6 +1,5 @@
 from rest_framework import serializers
 
-
 class GitHubCallbackQuerySerializer(serializers.Serializer):
     state = serializers.CharField(required=True)
     installation_id = serializers.IntegerField(required=True)
@@ -17,3 +16,6 @@ class GitHubCallbackQuerySerializer(serializers.Serializer):
 class DownloadRepoSerializer(serializers.Serializer):
     branch = serializers.CharField(required=False, allow_blank=True, default="main")
     repo_full_name = serializers.CharField(required=True)
+
+class BranchListSerializer(serializers.Serializer):
+    repo = serializers.CharField(required=True)

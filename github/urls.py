@@ -6,13 +6,15 @@ from github.views import (
     ListReposView,
     # GitHubRepositorySelectionView,
     GitHubWebhookView,
-    DownloadRepo
+    DownloadRepo,
+    ListRepoBranchesView
 )
 
 urlpatterns = [
     path("install-url/", GitHubInstallUrlView.as_view(), name="github-install-url"),
     path("callback/", GitHubCallbackView.as_view(), name="github-callback"),
     path("repos/", ListReposView.as_view(), name="github-repos"),
+    path("repos/branches/<path:repo>/", ListRepoBranchesView.as_view(), name="github-repo-branches"),
     path(
         "repo/download/",
         DownloadRepo.as_view(),

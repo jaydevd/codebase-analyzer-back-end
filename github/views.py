@@ -18,8 +18,10 @@ from github.services.github_app import GitHubAppService
 from github.serializers import (
     GitHubCallbackQuerySerializer,
     DownloadRepoSerializer,
+    BranchListSerializer
 )
 
+from embeddings.services import embed
 logger = logging.getLogger(__name__)
 service = GitHubAppService()
 
@@ -315,3 +317,16 @@ class DownloadRepo(APIView):
             )
 
         return success_response("GitHub repo downloaded successfully.")
+
+class ListRepoBranchesView(APIView):
+    permission_classes=[IsAuthenticated]
+    serializer_class=[BranchListSerializer]
+
+    def get(self, request, repo):
+        user_email = request.user
+        user = User.objects.get(email=user_email)
+        installation_id = user.github_installation_id
+
+        branches = service.listRepoBranches(repo, installation_id)
+
+        return success_response(message="branches listed successfully", data=branches)
