@@ -11,14 +11,14 @@ from qdrant_client.models import (
 )
 import hashlib
 import uuid
-from common.constants import VOYAGE_API_KEY, QDRANT_URL, QDRANT_API_KEY
+from common.constants import VOYAGE_API_KEY, QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
 
 qdrant = QdrantClient(
     url=QDRANT_URL,        # e.g. "http://localhost:6333" or your Qdrant Cloud URL
     api_key=QDRANT_API_KEY # only needed for Qdrant Cloud
 )
 
-COLLECTION_NAME = 'codebase_chunks'
+COLLECTION_NAME = QDRANT_COLLECTION
 VECTOR_SIZE = 1024  # voyage-code-3 outputs 1024-dim vectors
 
 voyage_client = voyageai.Client(api_key=VOYAGE_API_KEY)
@@ -48,7 +48,7 @@ MAX_FILE_BYTES = 100_000
 
 class EmbeddingService:
 
-  def ensure_collection():
+  def ensure_collection(self):
     """Create the Qdrant collection if it doesn't exist yet."""
     existing = [c.name for c in qdrant.get_collections().collections]
     if COLLECTION_NAME not in existing:
@@ -59,7 +59,7 @@ class EmbeddingService:
         print(f"Created collection: {COLLECTION_NAME}")
 
 
-  def stable_id(repo: str, file_path: str, chunk_index: int) -> str:
+  def stable_id(self, repo: str, file_path: str, chunk_index: int) -> str:
       """Deterministic UUID based on content identity — safe to upsert repeatedly."""
       key = f"{repo}:{file_path}:{chunk_index}"
       return str(uuid.UUID(hashlib.md5(key.encode()).hexdigest()))
@@ -107,7 +107,7 @@ class EmbeddingService:
         )
         print(f"Stored {min(i + 100, len(points))}/{len(points)} points")
 
-  def should_index(entry: dict) -> bool:
+  def should_index(self, entry: dict) -> bool:
     path = entry.get('path', '')
     size = entry.get('size', 0)
     filename = path.split('/')[-1]
@@ -127,7 +127,7 @@ class EmbeddingService:
     all_blobs = [e for e in tree_response['tree'] if e['type'] == 'blob']
     return [e for e in all_blobs if self.should_index(e)]
   
-  def embed_chunks(chunks: list[dict]) -> list[dict]:
+  def embed_chunks(self, chunks: list[dict]) -> list[dict]:
     """
     Adds an 'embedding' field to each chunk.
     Processes in batches to respect API limits.
@@ -155,7 +155,7 @@ class EmbeddingService:
 
     return chunks
   
-  def chunk_file(path: str, content: str, max_chars: int = 1500) -> list[dict]:
+  def chunk_file(self, path: str, content: str, max_chars: int = 1500) -> list[dict]:
     """
     Splits file content into chunks at logical boundaries.
     Returns list of { text, chunk_index, start_line, end_line }
@@ -212,14 +212,13 @@ class EmbeddingService:
     print(f"Total chunks: {len(all_chunks)}")
     return all_chunks
   
-  @shared_task
   def index_branch(
     self,
     owner: str,
     repo: str,
     branch: str,
     commit_sha: str,
-    tree_response: dict,   # ← your existing res variable goes here
+    tree_response: dict,
     installation_id: int
   ):
       print("Step 1: Filtering tree...")
@@ -246,3 +245,9 @@ class EmbeddingService:
           'chunk_count': len(embedded_chunks),
           'commit_sha': commit_sha,
       }
+
+
+@shared_task(bind=True)
+def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, installation_id):
+    service = EmbeddingService()
+    service.index_branch(owner, repo, branch, commit_sha, tree_response, installation_id)

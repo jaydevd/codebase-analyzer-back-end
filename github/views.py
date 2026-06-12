@@ -327,6 +327,6 @@ class ListRepoBranchesView(APIView):
         user = User.objects.get(email=user_email)
         installation_id = user.github_installation_id
 
-        branches = service.listRepoBranches(repo, installation_id)
+        branches = service.list_repo_branches(repo, installation_id)
 
         return success_response(message="branches listed successfully", data=branches)

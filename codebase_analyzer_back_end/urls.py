@@ -21,4 +21,5 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("auth/", include("auth.urls")),
     path("api/github/", include("github.urls")),
+    path("embed/", include("embeddings.urls"))
 ]

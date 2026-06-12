@@ -119,7 +119,7 @@ class GitHubAppService:
         # For example:
         # git.Repo.clone_from(clone_url, local_path, branch=branch)
 
-    def listRepoBranches(self, repo:str, installation_id):
+    def list_repo_branches(self, repo:str, installation_id):
         installation_token = self.get_installation_token(installation_id)
         response = requests.get(
             f"{GITHUB_BASE_URL}/repos/{repo}/branches",
@@ -129,12 +129,11 @@ class GitHubAppService:
                 "User-Agent": settings.GITHUB_APP_SLUG,
             }
         )
-        print("listRepoBranches response: ", response.json())
 
         response.raise_for_status()
         return response.json()
 
-    def getRepo(self, repo: str, installation_id: int):
+    def get_repo(self, repo: str, installation_id: int):
         installation_token = self.get_installation_token(installation_id)
         response = requests.get(
             f"{GITHUB_BASE_URL}/repos/{repo}",
@@ -144,28 +143,27 @@ class GitHubAppService:
                 "User-Agent": settings.GITHUB_APP_SLUG,
             }
         )
-        print("getRepo response: ", response.json())
 
         response.raise_for_status()
         return response.json()
     
-    def getRepoFilesForBranch(self, repo: str, sha: str, installation_id: int):
-        installation_token = self.get_installation_token(installation_id)
-        config = {
-            "url": f"{GITHUB_BASE_URL}/repos/{repo}/git/trees/{sha}?recursive=1",
-            "headers": {
-                "Authorization": f"token {installation_token}",
-                "Accept": "application/vnd.github+json",
-                "User-Agent": settings.GITHUB_APP_SLUG,
-            }
-        }
-        response = requests.get(config["url"],config["headers"])
+    # def getRepoFilesForBranch(self, repo: str, sha: str, installation_id: int):
+    #     installation_token = self.get_installation_token(installation_id)
+    #     config = {
+    #         "url": f"{GITHUB_BASE_URL}/repos/{repo}/git/trees/{sha}?recursive=1",
+    #         "headers": {
+    #             "Authorization": f"token {installation_token}",
+    #             "Accept": "application/vnd.github+json",
+    #             "User-Agent": settings.GITHUB_APP_SLUG,
+    #         }
+    #     }
+    #     response = requests.get(config["url"],config["headers"])
 
-        print("file-tree response", response.json())
+    #     print("file-tree response", response.json())
 
-        return response.json()
+    #     return response.json()
 
-    def getRepoBranch(self, repo: str, branch_ref: str, installation_id: int):
+    def get_repo_branch(self, repo: str, branch_ref: str, installation_id: int):
         installation_token = self.get_installation_token(installation_id)
         response = requests.get(
             f"{GITHUB_BASE_URL}/repos/{repo}/git/ref/heads/{branch_ref}",
@@ -175,7 +173,6 @@ class GitHubAppService:
                 "User-Agent": settings.GITHUB_APP_SLUG,
             }
         )
-        print("getRepoBranch response: ", response.json())
 
         response.raise_for_status()
         return response.json()
@@ -200,7 +197,6 @@ class GitHubAppService:
                 "User-Agent": settings.GITHUB_APP_SLUG,
             }
         )
-        print("fetch_tree response: ", response.json())
         
         response.raise_for_status()
         return response.json()
