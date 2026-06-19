@@ -90,8 +90,8 @@ INSTALLED_APPS = [
     "common",
     "auth.apps.AuthConfig",
     "github",
-    "services",
-    "embeddings"
+    "embeddings",
+    "core"
 ]
 
 MIDDLEWARE = [

@@ -1,62 +1,41 @@
 from celery import shared_task
-from github.services.github_app import GitHubAppService
 import re
-import voyageai
 import time
 
-from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct, Filter,
     FieldCondition, MatchValue
 )
 import hashlib
 import uuid
-from common.constants import VOYAGE_API_KEY, QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION
-
-qdrant = QdrantClient(
-    url=QDRANT_URL,        # e.g. "http://localhost:6333" or your Qdrant Cloud URL
-    api_key=QDRANT_API_KEY # only needed for Qdrant Cloud
+from common.constants import (
+  QDRANT_COLLECTION,
+  qdrant,
+  voyage_client,
+  VOYAGE_EMBEDDING_MODEL,
+  EXCLUDED_DIRS,
+  EXCLUDED_EXTENSIONS,
+  EXCLUDED_FILENAMES,
+  EMBED_BATCH_SIZE,
+  VECTOR_SIZE,
+  MAX_FILE_BYTES
 )
+from github.services.github_app import github_service
+from embeddings.services.rate_limiter import VoyageRateLimiter
 
-COLLECTION_NAME = QDRANT_COLLECTION
-VECTOR_SIZE = 1024  # voyage-code-3 outputs 1024-dim vectors
-
-voyage_client = voyageai.Client(api_key=VOYAGE_API_KEY)
-
-EMBED_BATCH_SIZE = 128 
-github_service = GitHubAppService()
-
-EXCLUDED_DIRS = [
-    'node_modules/', 'vendor/', '.git/', 'dist/', 'build/', 'out/',
-    '__pycache__/', '.venv/', 'venv/', 'env/', 'coverage/', 'target/',
-    '.next/', '.nuxt/', 'bin/', 'obj/',
-]
-
-EXCLUDED_EXTENSIONS = {
-    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
-    '.mp4', '.mp3', '.wav', '.pdf', '.zip', '.tar', '.gz',
-    '.min.js', '.min.css', '.map', '.pyc', '.pyo', '.class',
-    '.dll', '.so', '.exe', '.dylib',
-}
-
-EXCLUDED_FILENAMES = {
-    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
-    'Gemfile.lock', 'poetry.lock', 'Cargo.lock',
-}
-
-MAX_FILE_BYTES = 100_000
+rate_limiter = VoyageRateLimiter()
 
 class EmbeddingService:
 
   def ensure_collection(self):
     """Create the Qdrant collection if it doesn't exist yet."""
     existing = [c.name for c in qdrant.get_collections().collections]
-    if COLLECTION_NAME not in existing:
+    if QDRANT_COLLECTION not in existing:
         qdrant.create_collection(
-            collection_name=COLLECTION_NAME,
+            collection_name=QDRANT_COLLECTION,
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
         )
-        print(f"Created collection: {COLLECTION_NAME}")
+        print(f"Created collection: {QDRANT_COLLECTION}")
 
 
   def stable_id(self, repo: str, file_path: str, chunk_index: int) -> str:
@@ -77,11 +56,14 @@ class EmbeddingService:
     self.ensure_collection()
 
     points = []
+    print(f"[DEBUG] Preparing to store {len(chunks)} chunks in Qdrant")
     for chunk in chunks:
         if 'embedding' not in chunk:
+            print(f"[DEBUG] Skipping chunk {chunk.get('chunk_index')} for {chunk.get('file_path')} as embedding is missing")
             continue  # skip failed embeddings
 
         point_id = self.stable_id(f"{owner}/{repo}", chunk['file_path'], chunk['chunk_index'])
+        print(f"[DEBUG] Created Point ID: {point_id} for {owner}/{repo}:{chunk['file_path']}:{chunk['chunk_index']}")
 
         points.append(PointStruct(
             id=point_id,
@@ -99,11 +81,14 @@ class EmbeddingService:
             }
         ))
 
+    print(f"[DEBUG] Total points prepared for upsert: {len(points)}")
     # upsert in batches of 100
     for i in range(0, len(points), 100):
+        batch_points = points[i: i + 100]
+        print(f"[DEBUG] Upserting batch of {len(batch_points)} points to collection {QDRANT_COLLECTION}")
         qdrant.upsert(
-            collection_name=COLLECTION_NAME,
-            points=points[i: i + 100],
+            collection_name=QDRANT_COLLECTION,
+            points=batch_points,
         )
         print(f"Stored {min(i + 100, len(points))}/{len(points)} points")
 
@@ -127,33 +112,24 @@ class EmbeddingService:
     all_blobs = [e for e in tree_response['tree'] if e['type'] == 'blob']
     return [e for e in all_blobs if self.should_index(e)]
   
-  def embed_chunks(self, chunks: list[dict]) -> list[dict]:
+  def embed_chunks_batch(self, batch: list[dict]) -> list[dict]:
     """
-    Adds an 'embedding' field to each chunk.
-    Processes in batches to respect API limits.
+    Adds an 'embedding' field to each chunk in a given batch.
+    Designed to be called by a Celery task that has already checked rate limits.
     """
-    for i in range(0, len(chunks), EMBED_BATCH_SIZE):
-        batch = chunks[i: i + EMBED_BATCH_SIZE]
-        texts = [c['text'] for c in batch]
+    texts = [c['text'] for c in batch]
+    print(f"[DEBUG] Generating embeddings for batch of {len(batch)} chunks")
 
-        try:
-            result = voyage_client.embed(
-                texts,
-                model='voyage-code-3',   # best model for code retrieval
-                input_type='document',   # 'document' for indexing, 'query' for queries
-            )
-            for chunk, embedding in zip(batch, result.embeddings):
-                chunk['embedding'] = embedding
+    result = voyage_client.embed(
+        texts,
+        model=VOYAGE_EMBEDDING_MODEL,
+        input_type='document',   # 'document' for indexing, 'query' for queries
+    )
+    for chunk, embedding in zip(batch, result.embeddings):
+        chunk['embedding'] = embedding
+    print(f"[DEBUG] Successfully generated embeddings for batch of {len(batch)} chunks")
 
-        except Exception as e:
-            print(f"Embedding batch {i} failed: {e}")
-            time.sleep(2)  # back off and retry
-            continue
-
-        time.sleep(0.1)  # gentle rate limiting between batches
-        print(f"Embedded {min(i + EMBED_BATCH_SIZE, len(chunks))}/{len(chunks)} chunks")
-
-    return chunks
+    return batch
   
   def chunk_file(self, path: str, content: str, max_chars: int = 1500) -> list[dict]:
     """
@@ -233,21 +209,88 @@ class EmbeddingService:
       print("Step 3: Chunking files...")
       all_chunks = self.chunk_all_files(file_contents)
 
-      print("Step 4: Generating embeddings...")
-      embedded_chunks = self.embed_chunks(all_chunks)
+      print("Step 4: Dispatching embedding tasks...")
+      
+      # Group chunks into batches that are around 2000-3000 tokens
+      batches = []
+      current_batch = []
+      current_tokens = 0
+      
+      for chunk in all_chunks:
+          chunk_tokens = rate_limiter.estimate_tokens([chunk['text']])
+          # If a single chunk is larger than target, just send it (should be rare)
+          if current_tokens + chunk_tokens > 2500 and current_batch:
+              batches.append(current_batch)
+              current_batch = []
+              current_tokens = 0
+              
+          current_batch.append(chunk)
+          current_tokens += chunk_tokens
+          
+      if current_batch:
+          batches.append(current_batch)
+          
+      print(f"[DEBUG] Created {len(batches)} batches for embedding")
 
-      print("Step 5: Storing in Qdrant...")
-      self.store_chunks(embedded_chunks, owner, repo, branch, commit_sha, blob_sha_map)
+      # Dispatch each batch as a separate Celery task
+      for batch in batches:
+          embed_batch_task.delay(batch, owner, repo, branch, commit_sha, blob_sha_map)
 
-      print(f"✓ Indexed {len(filtered_files)} files → {len(embedded_chunks)} chunks")
+      print(f"✓ Queued {len(filtered_files)} files → {len(batches)} batches for embedding")
       return {
           'file_count': len(filtered_files),
-          'chunk_count': len(embedded_chunks),
+          'chunk_count': len(all_chunks),
+          'batch_count': len(batches),
           'commit_sha': commit_sha,
       }
 
 
+embedding_service = EmbeddingService()
+
+
 @shared_task(bind=True)
 def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, installation_id):
-    service = EmbeddingService()
-    service.index_branch(owner, repo, branch, commit_sha, tree_response, installation_id)
+    try:
+        print("[DEBUG] index_branch_task: imposing the embedding service")
+        service = EmbeddingService()
+        print("[DEBUG] index_branch_task: embedding service impose.")
+        service.index_branch(owner, repo, branch, commit_sha, tree_response, installation_id)
+        print("[DEBUG] index_branch_Task: calling index_branch method.")
+    except Exception as e:
+        print(f"[ERROR] index_branch_task failed: {e}")
+
+@shared_task(bind=True, max_retries=None)
+def embed_batch_task(self, batch, owner, repo, branch, commit_sha, blob_sha_map):
+    try:
+        texts = [c['text'] for c in batch]
+        tokens = rate_limiter.estimate_tokens(texts)
+        
+        # Check rate limits
+        wait_time = rate_limiter.calculate_wait_time(tokens)
+        if wait_time > 0:
+            print(f"[RATE LIMIT] Delaying execution by {wait_time:.1f}s (Tokens: {tokens})")
+            raise self.retry(countdown=wait_time)
+            
+        # We have capacity, consume it
+        rate_limiter.consume(tokens)
+        
+        service = EmbeddingService()
+        embedded_batch = service.embed_chunks_batch(batch)
+        service.store_chunks(embedded_batch, owner, repo, branch, commit_sha, blob_sha_map)
+        
+    except Exception as e:
+        # Handle 429 specifically for exponential backoff if Voyage rate limited us
+        if "429" in str(e) or "Too Many Requests" in str(e):
+            # Calculate exponential backoff (e.g. 20s, 40s, 80s...)
+            retries = self.request.retries
+            backoff = 20 * (2 ** retries)
+            print(f"[BACKOFF] Encountered 429. Retrying in {backoff}s. Attempt {retries + 1}")
+            raise self.retry(exc=e, countdown=backoff)
+            
+        # If it's a Retry exception, let it propagate (for rate limiting logic)
+        if "Retry" in str(e.__class__.__name__):
+            raise
+            
+        print(f"[ERROR] embed_batch_task failed: {e}")
+        # Could also add generic retry for other errors here
+        raise self.retry(exc=e, countdown=60)

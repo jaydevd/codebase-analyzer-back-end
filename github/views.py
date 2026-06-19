@@ -21,7 +21,7 @@ from github.serializers import (
     BranchListSerializer
 )
 
-from embeddings.services import embed
+import re
 logger = logging.getLogger(__name__)
 service = GitHubAppService()
 
@@ -107,8 +107,8 @@ class GitHubCallbackView(APIView):
             github_installation_id=installation_id,
         )
 
-        redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/github/success"
-        return redirect(redirect_url)
+        # redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/dashboard"
+        return success_response(message="installation successful")
 
 
 class ListReposView(APIView):
@@ -325,8 +325,49 @@ class ListRepoBranchesView(APIView):
     def get(self, request, repo):
         user_email = request.user
         user = User.objects.get(email=user_email)
+        owner = user.github_username
         installation_id = user.github_installation_id
 
-        branches = service.list_repo_branches(repo, installation_id)
+        branches = service.list_repo_branches(owner, repo, installation_id)
 
         return success_response(message="branches listed successfully", data=branches)
+
+class SearchReposView(APIView):
+    permission_classes=[IsAuthenticated]
+    
+    def get(self, request):
+        user_email=request.user
+        user = User.objects.get(email=user_email)
+        installation_id = user.github_installation_id
+        query = request.query_params.get('query')
+
+        repos = service.get_installation_repositories(installation_id)
+
+        repos = [
+            {
+                "id": repo.get("id"),
+                "name": repo.get("name"),
+                "full_name": repo.get("full_name"),
+                "private": repo.get("private", False),
+            }
+            for repo in repos
+        ]
+
+        filtered_repos = [
+            repo
+            for repo in repos
+            if re.search(query, repo['name'], re.IGNORECASE)
+        ]
+
+        # formatted = [
+        #     {
+        #         "id": repo.get("id"),
+        #         "name": repo.get("name"),
+        #         "full_name": repo.get("full_name"),
+        #         "private": repo.get("private", False),
+        #     }
+        #     for repo in filtered_repos
+        # ]
+        response_data = filtered_repos if len(filtered_repos) > 0 else repos
+
+        return success_response(message="searched repos found", data=response_data)
