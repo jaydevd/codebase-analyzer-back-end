@@ -21,9 +21,10 @@ class QueryViewTests(SimpleTestCase):
             is_authenticated=True,
             id="test-user-id",
             email="query@example.com",
+            github_username="testuser",
         )
 
-    @patch("core.views.generate_response")
+    @patch("core.views.generate_response_with_history")
     @patch("core.views.assemble_context")
     @patch("core.views.merge_and_rank")
     @patch("core.views.search_codebase")
@@ -34,42 +35,46 @@ class QueryViewTests(SimpleTestCase):
         mock_search_codebase,
         mock_merge_and_rank,
         mock_assemble_context,
-        mock_generate_response,
+        mock_generate_response_with_history,
     ):
         mock_process_attached_files.return_value = [{"file_path": "attached.py"}]
         mock_search_codebase.return_value = [{"file_path": "repo.py"}]
         mock_merge_and_rank.return_value = [{"file_path": "repo.py"}]
         mock_assemble_context.return_value = "assembled context"
-        mock_generate_response.return_value = "final answer"
+        mock_generate_response_with_history.return_value = "final answer"
 
         request = self.factory.post(
             "/api/query/",
             {
                 "prompt": "How does auth work?",
-                "repo": "owner/repo",
+                "repo": "repo",
                 "branch": "main",
                 "stream": False,
+                "chat_id": "00000000-0000-0000-0000-000000000001",
                 "attached_files": [{"filename": "notes.py", "content": "print('x')"}],
-                "history": [{"role": "user", "content": "previous question"}],
             },
             format="json",
         )
         force_authenticate(request, user=self.user)
-        response = QueryView.as_view()(request)
+
+        session_mock = Mock(pk="00000000-0000-0000-0000-000000000001")
+        with patch("core.views.get_object_or_404", return_value=session_mock):
+            response = QueryView.as_view()(request)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["message"], "Query processed successfully.")
         self.assertEqual(response.data["data"]["answer"], "final answer")
-        mock_generate_response.assert_called_once_with(
+        mock_generate_response_with_history.assert_called_once_with(
             "How does auth work?",
             "assembled context",
+            session_id="00000000-0000-0000-0000-000000000001",
             stream=False,
         )
 
     def test_post_rejects_invalid_payload(self):
         request = self.factory.post(
             "/api/query/",
-            {"repo": "owner/repo", "branch": "main", "stream": False},
+            {"repo": "repo", "branch": "main", "stream": False},
             format="json",
         )
         force_authenticate(request, user=self.user)
@@ -82,7 +87,7 @@ class QueryViewTests(SimpleTestCase):
 
 class AssembleContextTests(SimpleTestCase):
     @patch("core.query.tiktoken.get_encoding")
-    def test_assemble_context_includes_recent_history_and_code_chunks(self, mock_get_encoding):
+    def test_assemble_context_includes_code_chunks(self, mock_get_encoding):
         class FakeEncoding:
             @staticmethod
             def encode(value):
@@ -98,15 +103,9 @@ class AssembleContextTests(SimpleTestCase):
                     "text": "def post(self, request):\n    return None",
                 }
             ],
-            conversation_history=[
-                {"role": "user", "content": "first"},
-                {"role": "assistant", "content": "second"},
-            ],
         )
 
-        self.assertIn("## Conversation history", context)
-        self.assertIn("user: first", context)
-        self.assertIn("assistant: second", context)
+        self.assertNotIn("## Conversation history", context)
         self.assertIn("--- core/views.py (lines 10-20) ---", context)
 
 

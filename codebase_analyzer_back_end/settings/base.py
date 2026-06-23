@@ -266,16 +266,12 @@ SECURE_BROWSER_XSS_FILTER = True
 #     MIGRATION_MODULES = DisableMigrations()
 
 CELERY_BROKER_URL = get_env("CELERY_BROKER_URL", get_env("REDIS_URL", "redis://localhost:6379/0"))
-
 CELERY_RESULT_BACKEND = get_env("CELERY_RESULT_BACKEND", get_env("REDIS_URL", "redis://localhost:6379/0"))
-
 CELERY_ACCEPT_CONTENT = ["json"]
-
 CELERY_TASK_SERIALIZER = "json"
-
 CELERY_RESULT_SERIALIZER = "json"
-
 CELERY_TIMEZONE = "Asia/Kolkata"
+CELERY_WORKER_POOL = "solo"
 
 QDRANT_URL        = os.getenv('QDRANT_URL')
 QDRANT_API_KEY    = os.getenv('QDRANT_API_KEY')

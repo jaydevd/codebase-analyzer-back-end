@@ -1,7 +1,8 @@
 import tiktoken
+import traceback
 from typing import Generator
 from qdrant_client.models import Filter, FieldCondition, MatchValue
-import traceback
+
 from common.constants import (
     QDRANT_COLLECTION,
     qdrant,
@@ -33,7 +34,7 @@ def process_attached_files(files: list[dict]) -> list[dict]:
 
 
 def search_codebase(
-    prompt: str, repo: str, branch: str, top_k: int = 8
+    prompt: str, repo: str, branch: str, top_k: int = 50
 ) -> list[dict]:
     result = voyage_client.embed(
         [prompt],
@@ -82,26 +83,9 @@ def merge_and_rank(
     return sorted(combined, key=lambda c: (c["priority"], -c.get("score", 0)))
 
 
-def assemble_context(
-    chunks: list[dict], conversation_history: list[dict] = None
-) -> str:
+def assemble_context(chunks: list[dict]) -> str:
     enc = tiktoken.get_encoding("cl100k_base")
     remaining = MAX_CONTEXT_TOKENS
-
-    parts = []
-
-    if conversation_history:
-        history_lines = []
-        for turn in conversation_history[-5:]:
-            role = turn.get("role", "unknown")
-            content = turn.get("content", "")
-            history_lines.append(f"{role}: {content}")
-        history_section = (
-            "## Conversation history\n" + "\n".join(history_lines) + "\n\n"
-        )
-        history_tokens = len(enc.encode(history_section))
-        remaining -= history_tokens
-        parts.append(history_section)
 
     code_parts = []
     for chunk in chunks:
@@ -115,28 +99,25 @@ def assemble_context(
         code_parts.append(formatted)
         remaining -= token_count
 
-    parts.append("## Relevant code\n" + "".join(code_parts))
-    return "".join(parts)
+    return "## Relevant code\n" + "".join(code_parts)
 
 
-def generate_response(
-    prompt: str, context: str, stream: bool = True
+def generate_response_with_history(
+    prompt: str, code_context: str, session_id: str, stream: bool = True
 ) -> str | Generator[str, None, None]:
-    
-    try:
-        user_message = f"{context}\n\n## User question\n{prompt}"
-
-        if stream:
-            return langchain_service.stream(
-                system_prompt=SYSTEM_PROMPT,
-                user_message=user_message,
-            )
-
-        return langchain_service.invoke(
+    if stream:
+        return langchain_service.stream_with_history(
             system_prompt=SYSTEM_PROMPT,
-            user_message=user_message,
+            code_context=code_context,
+            input=prompt,
+            session_id=session_id,
         )
-    except Exception as e:
-        print("something went wrong...")
-        traceback.print_exc()
-        return None
+    return langchain_service.invoke_with_history(
+        system_prompt=SYSTEM_PROMPT,
+        code_context=code_context,
+        input=prompt,
+        session_id=session_id,
+    )
+
+
+

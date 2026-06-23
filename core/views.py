@@ -10,33 +10,18 @@ from core.query import (
     search_codebase,
     merge_and_rank,
     assemble_context,
-    generate_response,
+    generate_response_with_history,
 )
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated
 from core.serializers import (
     QueryRequestSerializer,
-    SaveChatSerializer,
     CreateChatSessionSerializer,
     ChatSessionSerializer,
     UpdateChatSessionSerializer,
     ChatSessionDetailSerializer,
 )
-from core.models import ChatSession, ChatMessage
+from core.models import ChatSession
 
-
-def _save_on_complete(stream_generator, message):
-    """Streaming generator wrapper that persists the full response on completion."""
-    full = []
-    for chunk in stream_generator:
-        full.append(chunk)
-        yield chunk
-    message.content = "".join(full)
-    message.save(update_fields=["content", "updated_at"])
-
-
-# ---------------------------------------------------------------------------
-# Query
-# ---------------------------------------------------------------------------
 
 class QueryView(APIView):
     permission_classes = [IsAuthenticated]
@@ -57,29 +42,26 @@ class QueryView(APIView):
         repo = serializer.validated_data["repo"]
         branch = serializer.validated_data["branch"]
         attached_files = serializer.validated_data.get("attached_files", [])
-        history = serializer.validated_data.get("history")
         should_stream = serializer.validated_data.get("stream", True)
 
-        # Validate session exists and belongs to this user
         session = get_object_or_404(
             ChatSession, pk=chat_id, user_id=request.user, is_deleted=False
         )
 
         owner = user.github_username
         repo = owner + '/' + repo
-
-        # Persist the message immediately (content will be filled after LLM)
-        message = ChatMessage.objects.create(
-            chat_id=session, prompt=prompt, content=""
-        )
+        print("repo: ", repo)
 
         try:
             attached_chunks = process_attached_files(attached_files)
             indexed_chunks = search_codebase(prompt, repo, branch)
+            print("indexed_chunks: ", indexed_chunks)
             ranked = merge_and_rank(attached_chunks, indexed_chunks)
-            context = assemble_context(ranked, history)
-            print("context:", context)
-            response = generate_response(prompt, context, stream=should_stream)
+            code_context = assemble_context(ranked)
+            print("context: ", code_context)
+            response = generate_response_with_history(
+                prompt, code_context, session_id=str(chat_id), stream=should_stream
+            )
         except Exception:
             return error_response(
                 "Unable to process the query right now.",
@@ -88,22 +70,15 @@ class QueryView(APIView):
 
         if should_stream:
             return StreamingHttpResponse(
-                _save_on_complete(response, message),
+                response,
                 content_type="text/plain",
             )
 
-        # Non-streaming: update message content and return
-        message.content = response
-        message.save(update_fields=["content", "updated_at"])
         return success_response(
             "Query processed successfully.",
             data={"answer": response},
         )
 
-
-# ---------------------------------------------------------------------------
-# Chat Session CRUD
-# ---------------------------------------------------------------------------
 
 class CreateChatSessionView(APIView):
     permission_classes = [IsAuthenticated]

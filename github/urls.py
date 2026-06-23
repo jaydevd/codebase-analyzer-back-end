@@ -4,11 +4,11 @@ from github.views import (
     GitHubCallbackView,
     GitHubInstallUrlView,
     ListReposView,
-    # GitHubRepositorySelectionView,
     GitHubWebhookView,
     DownloadRepo,
     ListRepoBranchesView,
-    SearchReposView
+    SearchReposView,
+    RepoScanReportView,
 )
 
 urlpatterns = [
@@ -17,6 +17,7 @@ urlpatterns = [
     path("repos/", ListReposView.as_view(), name="github-repos"),
     path("repos/search/", SearchReposView.as_view(), name="github-repos-search"),
     path("repos/<str:repo>/branches/", ListRepoBranchesView.as_view(), name="github-repo-branches"),
+    path("repos/<int:repo_id>/scan-report/", RepoScanReportView.as_view(), name="github-repo-scan-report"),
     path(
         "repo/download/",
         DownloadRepo.as_view(),

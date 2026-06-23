@@ -1,8 +1,9 @@
 import logging
+import re
 import secrets
 
 from django.conf import settings
-from django.shortcuts import redirect
+from django.shortcuts import redirect, get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
@@ -10,27 +11,21 @@ from requests.exceptions import RequestException
 
 from auth.models import User
 from common.responses import error_response, success_response
-# from github.models import (
-#     GitHubInstallation,
-#     GitHubInstallationState,
-# )
-from github.services.github_app import GitHubAppService
+from github.models import GithubRepos, RepoBranch, BranchScan
 from github.serializers import (
     GitHubCallbackQuerySerializer,
     DownloadRepoSerializer,
-    BranchListSerializer
+    BranchListSerializer,
+    ScanReportBranchSerializer,
+    PreviousScanSerializer,
 )
+from github.services.github_app import GitHubAppService
 
-import re
 logger = logging.getLogger(__name__)
 service = GitHubAppService()
 
 
 class GitHubInstallUrlView(APIView):
-    """
-    Generates the GitHub App installation URL for the authenticated user.
-    This will give us permission to access the user's repositories based on the permissions granted during installation.
-    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -41,7 +36,6 @@ class GitHubInstallUrlView(APIView):
             )
 
         state = secrets.token_urlsafe(32)
-        print("request.user.id:", request.user.id)
 
         User.objects.filter(id=request.user.id).update(github_installation_state=state)
         install_url = (
@@ -51,12 +45,6 @@ class GitHubInstallUrlView(APIView):
 
 
 class GitHubCallbackView(APIView):
-    """
-    Handles the callback from GitHub after the user installs the app.
-    This will give access to the user's repositories based on the user permissions.
-    Take installation_id and installation token from the response after successful installation
-    and use the installation token for further API requests for user's repositories and other details.
-    """
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -65,16 +53,6 @@ class GitHubCallbackView(APIView):
 
         state = serializer.validated_data["state"]
         installation_id = serializer.validated_data["installation_id"]
-
-        # state_record = GitHubInstallationState.objects.filter(state=state, used=False).select_related("user").first()
-        # if not state_record:
-        #     return error_response(
-        #         "Invalid or expired GitHub callback state.",
-        #         status_code=status.HTTP_400_BAD_REQUEST,
-        #     )
-
-        # state_record.used = True
-        # state_record.save(update_fields=["used"])
 
         try:
             installation_details = service.get_installation_details(installation_id)
@@ -85,119 +63,70 @@ class GitHubCallbackView(APIView):
                 status_code=status.HTTP_502_BAD_GATEWAY,
             )
 
-        account = installation_details.get("account", {})
-        print("account details", account)
-
-        # account_login = account.get("login", "")
-        # account_type = account.get("type", "")
-
-        # GitHubInstallation.objects.update_or_create(
-        #     user=state_record.user,
-        #     defaults={
-        #         "installation_id": installation_id,
-        #         "account_login": account_login,
-        #         "account_type": account_type,
-        #     },
-        # )
-        github_username=account.get("login", "")
-        print("installation_id: ", installation_id)
+        github_username = installation_details.get("account", {}).get("login", "")
 
         User.objects.filter(github_installation_state=state).update(
             github_username=github_username,
             github_installation_id=installation_id,
         )
 
-        # redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/dashboard"
-        return success_response(message="installation successful")
+        return success_response(message="Installation successful. Webhook will sync repos.")
 
 
 class ListReposView(APIView):
-    """
-    Fetches the list of repositories accessible to the authenticated user based on their GitHub App installation.
-    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user_email=request.user
-        user = User.objects.get(email=user_email)
+        user = request.user
 
-        if not user:
+        if not user.is_github_installation_active or not user.github_installation_id:
             return error_response(
-                "user not found.",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
-        is_github_installation_active = user.is_github_installation_active
-        installation_id = user.github_installation_id
-
-        if not is_github_installation_active:
-            return error_response(
-                "Github installation is incomplete for this user.",
+                "GitHub installation is incomplete.",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
 
         try:
-            repositories = service.get_installation_repositories(installation_id)
+            repos = service.get_installation_repositories(user.github_installation_id)
         except RequestException:
             logger.exception(
-                "Failed to fetch GitHub repositories for installation %s",
-                installation_id,
+                "Failed to fetch GitHub repos for installation %s",
+                user.github_installation_id,
             )
             return error_response(
                 "Unable to retrieve GitHub repositories.",
                 status_code=status.HTTP_502_BAD_GATEWAY,
             )
 
-        formatted = [
+        for repo_data in repos:
+            repo_obj, _ = GithubRepos.objects.update_or_create(
+                repo_id=repo_data["id"],
+                defaults={
+                    "user_id": user,
+                    "name": repo_data["name"],
+                    "full_name": repo_data["full_name"],
+                    "private": repo_data.get("private", False),
+                    "default_branch": repo_data.get("default_branch", "main"),
+                    "is_deleted": False,
+                    "is_active": True,
+                },
+            )
+
+        db_repos = GithubRepos.objects.filter(user_id=user, is_deleted=False)
+        data = [
             {
-                "id": repo.get("id"),
-                "name": repo.get("name"),
-                "full_name": repo.get("full_name"),
-                "private": repo.get("private", False),
+                "id": r.repo_id,
+                "name": r.name,
+                "full_name": r.full_name,
+                "private": r.private,
+                "default_branch": r.default_branch,
+                "status": r.status,
             }
-            for repo in repositories
+            for r in db_repos
         ]
-        return success_response("GitHub repositories fetched successfully.", data=formatted)
-
-
-# class GitHubRepositorySelectionView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request):
-#         serializer = GitHubRepositorySelectionSerializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-
-#         installation = getattr(request.user, "github_installation", None)
-#         if not installation:
-#             return error_response(
-#                 "No GitHub installation is associated with the current user.",
-#                 status_code=status.HTTP_404_NOT_FOUND,
-#             )
-
-#         selections = serializer.validated_data["repositories"]
-#         GitHubRepositorySelection.objects.filter(installation=installation).delete()
-
-#         created_objects = [
-#             GitHubRepositorySelection(
-#                 installation=installation,
-#                 repository_id=item["id"],
-#                 name=item["name"],
-#                 full_name=item["full_name"],
-#                 private=item["private"],
-#             )
-#             for item in selections
-#         ]
-#         GitHubRepositorySelection.objects.bulk_create(created_objects)
-
-#         return success_response(
-#             "Repository selection saved successfully.",
-#             data={"selected_count": len(created_objects)},
-#         )
+        return success_response("GitHub repositories fetched successfully.", data=data)
 
 
 class GitHubWebhookView(APIView):
-    """
-    Handles incoming GitHub webhook events. Verifies the signature and processes events like installation, repository selection, and push events.
-    """
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -213,10 +142,8 @@ class GitHubWebhookView(APIView):
             )
 
         event = request.headers.get("X-GitHub-Event", "")
-        print("event:", event)
 
         payload = request.data
-        print("payload: ", payload)
 
         logger.info(
             "GitHub webhook received event=%s installation_id=%s action=%s",
@@ -227,37 +154,109 @@ class GitHubWebhookView(APIView):
 
         handler_name = f"handle_{event.replace('-', '_')}"
         handler = getattr(self, handler_name, self.handle_default)
-        print("handler: ", handler)
 
         return handler(payload)
+
+    def _sync_branches(self, repo_obj, installation_id):
+        try:
+            owner, repo_name = repo_obj.full_name.split("/", 1)
+            branches = service.list_repo_branches(owner, repo_name, installation_id)
+        except Exception:
+            logger.exception("Failed to sync branches for %s", repo_obj.full_name)
+            return
+
+        for branch_data in branches:
+            commit_sha = branch_data.get("commit", {}).get("sha", "")
+            commit_url = (
+                f"https://github.com/{repo_obj.full_name}/commit/{commit_sha}"
+                if commit_sha
+                else ""
+            )
+            RepoBranch.objects.update_or_create(
+                repo=repo_obj,
+                name=branch_data["name"],
+                defaults={
+                    "commit_sha": commit_sha,
+                    "commit_url": commit_url,
+                    "is_active": True,
+                },
+            )
 
     def handle_installation(self, payload):
         installation = payload.get("installation", {})
         action = payload.get("action")
         installation_id = installation.get("id")
-        print("installation_id:", installation_id)
 
         if action == "created":
-
-            installation_token = service.get_installation_token(installation_id)
-            # repos = service.get_installation_repositories(self, installation_id)
+            token = service.get_installation_token(installation_id)
 
             User.objects.filter(github_installation_id=installation_id).update(
-                github_installation_access_token=installation_token,
-                is_github_installation_active=True
+                github_installation_access_token=token,
+                is_github_installation_active=True,
             )
 
-        if action == "deleted" and installation_id:
-            User.object.filter(github_installation_id=installation_id).update(
+            repos = service.get_installation_repositories(installation_id)
+            for repo_data in repos:
+                repo_obj, _ = GithubRepos.objects.update_or_create(
+                    repo_id=repo_data["id"],
+                    defaults={
+                        "user_id": User.objects.get(github_installation_id=installation_id),
+                        "name": repo_data["name"],
+                        "full_name": repo_data["full_name"],
+                        "private": repo_data.get("private", False),
+                        "default_branch": repo_data.get("default_branch", "main"),
+                        "is_deleted": False,
+                        "is_active": True,
+                    },
+                )
+                self._sync_branches(repo_obj, installation_id)
+
+        elif action == "deleted" and installation_id:
+            GithubRepos.objects.filter(
+                user_id__github_installation_id=installation_id
+            ).update(is_deleted=True, is_active=False)
+            RepoBranch.objects.filter(
+                repo__user_id__github_installation_id=installation_id
+            ).update(is_active=False)
+            User.objects.filter(github_installation_id=installation_id).update(
                 github_installation_access_token=None,
                 github_installation_state=None,
-                is_github_installation_active=False
+                is_github_installation_active=False,
             )
-            logger.info("Deleted GitHub installation %s after webhook installation.deleted", installation_id)
 
         return success_response("GitHub installation event processed.")
 
     def handle_installation_repositories(self, payload):
+        action = payload.get("action")
+        installation_id = payload.get("installation", {}).get("id")
+
+        try:
+            user = User.objects.get(github_installation_id=installation_id)
+        except User.DoesNotExist:
+            return success_response("User not found; event skipped.")
+
+        if action == "added":
+            for repo_data in payload.get("repositories_added", []):
+                repo_obj, _ = GithubRepos.objects.update_or_create(
+                    repo_id=repo_data["id"],
+                    defaults={
+                        "user_id": user,
+                        "name": repo_data["name"],
+                        "full_name": repo_data["full_name"],
+                        "private": repo_data.get("private", False),
+                        "is_deleted": False,
+                        "is_active": True,
+                    },
+                )
+                self._sync_branches(repo_obj, installation_id)
+
+        elif action == "removed":
+            repo_ids = [r["id"] for r in payload.get("repositories_removed", [])]
+            GithubRepos.objects.filter(repo_id__in=repo_ids).update(
+                is_deleted=True, is_active=False
+            )
+            RepoBranch.objects.filter(repo__repo_id__in=repo_ids).update(is_active=False)
+
         return success_response("GitHub installation_repositories event processed.")
 
     def handle_push(self, payload):
@@ -269,23 +268,15 @@ class GitHubWebhookView(APIView):
     def handle_default(self, payload):
         return success_response("GitHub webhook received.")
 
+
 class DownloadRepo(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = DownloadRepoSerializer
 
     def post(self, request):
-        user = User.objects.get(email=request.user)
+        user = request.user
 
-        if not user:
-            return error_response(
-                "User not found.",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
-        
-        is_github_installation_active = user.is_github_installation_active
-        installation_id = user.github_installation_id
-
-        if not is_github_installation_active:
+        if not user.is_github_installation_active or not user.github_installation_id:
             return error_response(
                 "GitHub installation has not been completed for the current user.",
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -302,14 +293,12 @@ class DownloadRepo(APIView):
             branch = serializer.validated_data.get("branch")
             repo_full_name = serializer.validated_data.get("repo_full_name")
 
-            # donwnload the repository using the installation token and repo_id
-            service.download_repository(repo_full_name, installation_id, branch)
+            service.download_repository(repo_full_name, user.github_installation_id, branch)
 
-            # repositories = service.get_installation_repositories(installation.installation_id)
         except RequestException:
             logger.exception(
                 "Failed to download repo for installation %s",
-                installation_id,
+                user.github_installation_id,
             )
             return error_response(
                 "Unable to download github repo.",
@@ -318,13 +307,13 @@ class DownloadRepo(APIView):
 
         return success_response("GitHub repo downloaded successfully.")
 
+
 class ListRepoBranchesView(APIView):
-    permission_classes=[IsAuthenticated]
-    serializer_class=[BranchListSerializer]
+    permission_classes = [IsAuthenticated]
+    serializer_class = [BranchListSerializer]
 
     def get(self, request, repo):
-        user_email = request.user
-        user = User.objects.get(email=user_email)
+        user = request.user
         owner = user.github_username
         installation_id = user.github_installation_id
 
@@ -332,42 +321,63 @@ class ListRepoBranchesView(APIView):
 
         return success_response(message="branches listed successfully", data=branches)
 
+
 class SearchReposView(APIView):
-    permission_classes=[IsAuthenticated]
-    
+    permission_classes = [IsAuthenticated]
+
     def get(self, request):
-        user_email=request.user
-        user = User.objects.get(email=user_email)
-        installation_id = user.github_installation_id
-        query = request.query_params.get('query')
+        user = request.user
+        query = request.query_params.get("query", "")
 
-        repos = service.get_installation_repositories(installation_id)
+        repos = GithubRepos.objects.filter(user_id=user, is_deleted=False)
+        if query:
+            repos = repos.filter(name__icontains=query)
 
-        repos = [
+        data = [
             {
-                "id": repo.get("id"),
-                "name": repo.get("name"),
-                "full_name": repo.get("full_name"),
-                "private": repo.get("private", False),
+                "id": r.repo_id,
+                "name": r.name,
+                "full_name": r.full_name,
+                "private": r.private,
+                "default_branch": r.default_branch,
+                "status": r.status,
             }
-            for repo in repos
+            for r in repos
         ]
+        return success_response(message="Repos found", data=data)
 
-        filtered_repos = [
-            repo
-            for repo in repos
-            if re.search(query, repo['name'], re.IGNORECASE)
-        ]
 
-        # formatted = [
-        #     {
-        #         "id": repo.get("id"),
-        #         "name": repo.get("name"),
-        #         "full_name": repo.get("full_name"),
-        #         "private": repo.get("private", False),
-        #     }
-        #     for repo in filtered_repos
-        # ]
-        response_data = filtered_repos if len(filtered_repos) > 0 else repos
+class RepoScanReportView(APIView):
+    permission_classes = [IsAuthenticated]
 
-        return success_response(message="searched repos found", data=response_data)
+    def get(self, request, repo_id):
+        repo = get_object_or_404(
+            GithubRepos, repo_id=repo_id, user_id=request.user, is_deleted=False
+        )
+
+        branches = RepoBranch.objects.filter(repo=repo, is_active=True)
+
+        data = []
+        for branch in branches:
+            scans = branch.scans.all().order_by("-started_at")
+            previous_scans = [
+                {
+                    "commit_url": s.commit_url,
+                    "commit_sha": s.commit_sha,
+                    "indexed_at": s.completed_at or s.started_at,
+                }
+                for s in scans
+            ]
+            data.append(
+                {
+                    "branch": branch.name,
+                    "status": branch.status,
+                    "last_indexed_at": branch.last_indexed_at,
+                    "previous_scans": previous_scans,
+                }
+            )
+
+        return success_response(
+            f"Scan report fetched successfully {repo.full_name}",
+            data=data,
+        )
