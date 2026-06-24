@@ -22,6 +22,8 @@ class UserSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "last_login",
+            "is_github_installation_active",
+            "github_username"
         )
         read_only_fields = (
             "id",
