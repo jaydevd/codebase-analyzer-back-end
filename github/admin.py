@@ -1,28 +1,16 @@
 from django.contrib import admin
-
-from github.models import (
-    GitHubInstallation,
-    GitHubInstallationState,
-    GitHubRepositorySelection,
-)
+from github.models import GithubRepos, RepoBranch
 
 
-@admin.register(GitHubInstallation)
-class GitHubInstallationAdmin(admin.ModelAdmin):
-    list_display = ("user", "installation_id", "account_login", "account_type", "created_at")
-    search_fields = ("user__email", "account_login", "account_type")
-    readonly_fields = ("created_at", "updated_at")
+@admin.register(GithubRepos)
+class GithubReposAdmin(admin.ModelAdmin):
+    list_display = ("name", "full_name", "user_id", "status", "is_active", "is_deleted")
+    list_filter = ("status", "is_active", "is_deleted")
+    search_fields = ("name", "full_name", "user_id__email")
 
 
-@admin.register(GitHubInstallationState)
-class GitHubInstallationStateAdmin(admin.ModelAdmin):
-    list_display = ("user", "state", "used", "created_at")
-    list_filter = ("used",)
-    readonly_fields = ("created_at",)
-
-
-@admin.register(GitHubRepositorySelection)
-class GitHubRepositorySelectionAdmin(admin.ModelAdmin):
-    list_display = ("installation", "repository_id", "full_name", "private", "created_at")
-    search_fields = ("full_name",)
-    readonly_fields = ("created_at", "updated_at")
+@admin.register(RepoBranch)
+class RepoBranchAdmin(admin.ModelAdmin):
+    list_display = ("repo", "name", "status", "commit_sha", "last_indexed_at")
+    list_filter = ("status", "is_active")
+    search_fields = ("name", "repo__full_name")

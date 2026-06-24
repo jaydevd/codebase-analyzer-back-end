@@ -3,7 +3,7 @@ import uuid
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
 from django.db import models
-from django.utils import timezone
+from common.models import get_unix_timestamp
 
 class Role(models.TextChoices):
     ADMIN = "admin", "Admin"
@@ -50,9 +50,16 @@ class User(AbstractBaseUser, PermissionsMixin):
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.USER)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
-    created_at = models.DateTimeField(default=timezone.now, editable=False)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.BigIntegerField(default=get_unix_timestamp(), editable=False)
+    updated_at = models.BigIntegerField(default=get_unix_timestamp())
 
+    github_installation_id = models.IntegerField(null=True, blank=True)
+    github_username = models.CharField(max_length=255, null=True, blank=True)
+    github_installation_access_token = models.CharField(max_length=255, null=True, blank=True)
+    github_installation_state = models.CharField(max_length=64, null=True, blank=True)
+    is_github_installation_active = models.BooleanField(default=False)
+
+    is_deleted = models.BooleanField(default=False)
     objects = UserManager()
 
     USERNAME_FIELD = "email"

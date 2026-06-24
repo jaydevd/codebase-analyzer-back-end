@@ -27,3 +27,10 @@ chromadb==1.5.9
 pydantic==2.13.4
 pypdf==6.12.2
 celery
+
+# LLM and tokenization
+langchain-anthropic
+langchain-openai
+tiktoken>=0.9.0
+qdrant-client
+voyageai
