@@ -12,13 +12,15 @@ CSRF_TRUSTED_ORIGINS = get_list_env(
 )
 CORS_ALLOWED_ORIGINS = get_list_env(
     "CORS_ALLOWED_ORIGINS",
-    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8000,http://127.0.0.1:8000",
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
 )
 SIMPLE_JWT = build_simple_jwt(SECRET_KEY)
 
 SECURE_SSL_REDIRECT = False
 SESSION_COOKIE_SECURE = False
+SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SECURE = False
+CSRF_COOKIE_SAMESITE = "Lax"
 SECURE_HSTS_SECONDS = 0
 SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 SECURE_HSTS_PRELOAD = False

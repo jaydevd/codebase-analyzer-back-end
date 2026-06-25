@@ -10,6 +10,10 @@ User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
+    github_username = serializers.SerializerMethodField()
+    is_github_login_linked = serializers.SerializerMethodField()
+    is_github_repo_connected = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = (
@@ -23,7 +27,14 @@ class UserSerializer(serializers.ModelSerializer):
             "updated_at",
             "last_login",
             "is_github_installation_active",
-            "github_username"
+            "is_github_login_linked",
+            "is_github_repo_connected",
+            "github_username",
+            "github_oauth_username",
+            "github_installation_account_login",
+            "google_id",
+            "github_oauth_id",
+            "avatar_url",
         )
         read_only_fields = (
             "id",
@@ -33,7 +44,19 @@ class UserSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "last_login",
+            "google_id",
+            "github_oauth_id",
+            "avatar_url",
         )
+
+    def get_github_username(self, obj):
+        return obj.github_installation_account_login or obj.github_oauth_username or obj.github_username
+
+    def get_is_github_login_linked(self, obj):
+        return obj.is_github_login_linked
+
+    def get_is_github_repo_connected(self, obj):
+        return obj.is_github_repo_connected
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -160,6 +183,11 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             return User.objects.filter(pk=user_id, is_active=True).first()
         except (TypeError, ValueError, OverflowError):
             return None
+
+
+class GitHubOAuthCallbackQuerySerializer(serializers.Serializer):
+    code = serializers.CharField(required=True)
+    state = serializers.CharField(required=True)
 
 
 class CustomTokenRefreshSerializer(TokenRefreshSerializer):

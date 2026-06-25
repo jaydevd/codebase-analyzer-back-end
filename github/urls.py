@@ -6,6 +6,7 @@ from github.views import (
     ListReposView,
     GitHubWebhookView,
     DownloadRepo,
+    GitHubDisconnectView,
     ListRepoBranchesView,
     SearchReposView,
     RepoScanReportView,
@@ -23,5 +24,6 @@ urlpatterns = [
         DownloadRepo.as_view(),
         name="github-repo-download",
     ),
+    path("disconnect/", GitHubDisconnectView.as_view(), name="github-disconnect"),
     path("webhook/", GitHubWebhookView.as_view(), name="github-webhook"),
 ]

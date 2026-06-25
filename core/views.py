@@ -48,17 +48,19 @@ class QueryView(APIView):
             ChatSession, pk=chat_id, user_id=request.user, is_deleted=False
         )
 
-        owner = user.github_username
+        owner = user.github_installation_account_login or user.github_username
+        if not owner:
+            return error_response(
+                "GitHub repository owner is not configured for this account.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
         repo = owner + '/' + repo
-        print("repo: ", repo)
 
         try:
             attached_chunks = process_attached_files(attached_files)
             indexed_chunks = search_codebase(prompt, repo, branch)
-            print("indexed_chunks: ", indexed_chunks)
             ranked = merge_and_rank(attached_chunks, indexed_chunks)
             code_context = assemble_context(ranked)
-            print("context: ", code_context)
             response = generate_response_with_history(
                 prompt, code_context, session_id=str(chat_id), stream=should_stream
             )

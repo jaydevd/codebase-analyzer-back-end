@@ -53,24 +53,44 @@ class GitHubCallbackView(APIView):
 
         state = serializer.validated_data["state"]
         installation_id = serializer.validated_data["installation_id"]
+        user = User.objects.filter(github_installation_state=state).first()
+        if not user:
+            return redirect(self._frontend_url(error="invalid_installation_state"))
 
         try:
             installation_details = service.get_installation_details(installation_id)
         except RequestException:
             logger.exception("Failed to fetch GitHub installation details for %s", installation_id)
-            return error_response(
-                "Unable to fetch GitHub installation details.",
-                status_code=status.HTTP_502_BAD_GATEWAY,
-            )
+            return redirect(self._frontend_url(error="installation_lookup_failed"))
 
-        github_username = installation_details.get("account", {}).get("login", "")
+        github_account_login = installation_details.get("account", {}).get("login", "")
+        existing_owner = User.objects.filter(github_installation_id=installation_id).exclude(pk=user.pk).first()
+        if existing_owner:
+            return redirect(self._frontend_url(error="github_repo_installation_in_use"))
+        if user.github_installation_id and user.github_installation_id != installation_id:
+            return redirect(self._frontend_url(error="disconnect_existing_github_installation"))
+        if user.github_oauth_username and github_account_login and user.github_oauth_username != github_account_login:
+            return redirect(self._frontend_url(error="github_account_mismatch"))
 
-        User.objects.filter(github_installation_state=state).update(
-            github_username=github_username,
+        User.objects.filter(pk=user.pk).update(
+            github_installation_account_login=github_account_login,
             github_installation_id=installation_id,
+            github_installation_state=None,
+            is_github_installation_active=True,
+            github_username=github_account_login or user.github_oauth_username or user.github_username,
         )
 
-        return success_response(message="Installation successful. Webhook will sync repos.")
+        return redirect(self._frontend_url(action="github_repo_connected"))
+
+    @staticmethod
+    def _frontend_url(error=None, action=None):
+        query_parts = []
+        if error:
+            query_parts.append(f"error={error}")
+        if action:
+            query_parts.append(f"action={action}")
+        suffix = f"?{'&'.join(query_parts)}" if query_parts else ""
+        return f"{settings.FRONTEND_URL}/auth/callback{suffix}"
 
 
 class ListReposView(APIView):
@@ -79,26 +99,23 @@ class ListReposView(APIView):
     def get(self, request):
         user = request.user
 
-        if not user.is_github_installation_active or not user.github_installation_id:
-            return error_response(
-                "GitHub installation is incomplete.",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
-
         try:
-            repos = service.get_installation_repositories(user.github_installation_id)
+            if user.is_github_installation_active and user.github_installation_id:
+                repos = service.get_installation_repositories(user.github_installation_id)
+            else:
+                return error_response(
+                    "No GitHub repository connection found. Please connect the GitHub App.",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
         except RequestException:
-            logger.exception(
-                "Failed to fetch GitHub repos for installation %s",
-                user.github_installation_id,
-            )
+            logger.exception("Failed to fetch GitHub repos for user %s", user.id)
             return error_response(
                 "Unable to retrieve GitHub repositories.",
                 status_code=status.HTTP_502_BAD_GATEWAY,
             )
 
         for repo_data in repos:
-            repo_obj, _ = GithubRepos.objects.update_or_create(
+            GithubRepos.objects.update_or_create(
                 repo_id=repo_data["id"],
                 defaults={
                     "user_id": user,
@@ -117,6 +134,7 @@ class ListReposView(APIView):
                 "id": r.repo_id,
                 "name": r.name,
                 "full_name": r.full_name,
+                "url": f"https://github.com/{r.full_name}",
                 "private": r.private,
                 "default_branch": r.default_branch,
                 "status": r.status,
@@ -196,11 +214,12 @@ class GitHubWebhookView(APIView):
             )
 
             repos = service.get_installation_repositories(installation_id)
+            owner = User.objects.get(github_installation_id=installation_id)
             for repo_data in repos:
                 repo_obj, _ = GithubRepos.objects.update_or_create(
                     repo_id=repo_data["id"],
                     defaults={
-                        "user_id": User.objects.get(github_installation_id=installation_id),
+                        "user_id": owner,
                         "name": repo_data["name"],
                         "full_name": repo_data["full_name"],
                         "private": repo_data.get("private", False),
@@ -220,8 +239,10 @@ class GitHubWebhookView(APIView):
             ).update(is_active=False)
             User.objects.filter(github_installation_id=installation_id).update(
                 github_installation_access_token=None,
+                github_installation_account_login=None,
                 github_installation_state=None,
                 is_github_installation_active=False,
+                github_username=None,
             )
 
         return success_response("GitHub installation event processed.")
@@ -276,12 +297,6 @@ class DownloadRepo(APIView):
     def post(self, request):
         user = request.user
 
-        if not user.is_github_installation_active or not user.github_installation_id:
-            return error_response(
-                "GitHub installation has not been completed for the current user.",
-                status_code=status.HTTP_404_NOT_FOUND,
-            )
-
         try:
             serializer = self.serializer_class(data=request.data)
             if not serializer.is_valid():
@@ -290,18 +305,21 @@ class DownloadRepo(APIView):
                     status_code=status.HTTP_400_BAD_REQUEST,
                 )
 
-            branch = serializer.validated_data.get("branch")
+            branch = serializer.validated_data.get("branch", "main")
             repo_full_name = serializer.validated_data.get("repo_full_name")
 
-            service.download_repository(repo_full_name, user.github_installation_id, branch)
+            if user.is_github_installation_active and user.github_installation_id:
+                service.download_repository(repo_full_name, user.github_installation_id, branch)
+            else:
+                return error_response(
+                    "No GitHub repository connection found. Please connect the GitHub App.",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
 
         except RequestException:
-            logger.exception(
-                "Failed to download repo for installation %s",
-                user.github_installation_id,
-            )
+            logger.exception("Failed to download repo %s", repo_full_name)
             return error_response(
-                "Unable to download github repo.",
+                "Unable to download GitHub repo.",
                 status_code=status.HTTP_502_BAD_GATEWAY,
             )
 
@@ -314,12 +332,29 @@ class ListRepoBranchesView(APIView):
 
     def get(self, request, repo):
         user = request.user
-        owner = user.github_username
-        installation_id = user.github_installation_id
+        repo_obj = GithubRepos.objects.filter(
+            user_id=user, name__iexact=repo, is_deleted=False
+        ).first()
+        if not repo_obj:
+            return error_response("Repository not found.", status_code=status.HTTP_404_NOT_FOUND)
 
-        branches = service.list_repo_branches(owner, repo, installation_id)
+        try:
+            if user.is_github_installation_active and user.github_installation_id:
+                owner = repo_obj.full_name.split("/", 1)[0]
+                branches = service.list_repo_branches(owner, repo, user.github_installation_id)
+            else:
+                return error_response(
+                    "No GitHub repository connection found.",
+                    status_code=status.HTTP_404_NOT_FOUND,
+                )
+        except RequestException:
+            logger.exception("Failed to fetch branches for repo %s", repo)
+            return error_response(
+                "Unable to retrieve branches.",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+            )
 
-        return success_response(message="branches listed successfully", data=branches)
+        return success_response(message="Branches listed successfully", data=branches)
 
 
 class SearchReposView(APIView):
@@ -345,6 +380,31 @@ class SearchReposView(APIView):
             for r in repos
         ]
         return success_response(message="Repos found", data=data)
+
+
+class GitHubDisconnectView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        if not user.github_installation_id:
+            return error_response(
+                "GitHub repositories are not connected.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        GithubRepos.objects.filter(user_id=user).update(is_deleted=True, is_active=False)
+        RepoBranch.objects.filter(repo__user_id=user).update(is_active=False)
+        User.objects.filter(pk=user.pk).update(
+            github_installation_access_token=None,
+            github_installation_account_login=None,
+            github_installation_id=None,
+            github_installation_state=None,
+            is_github_installation_active=False,
+            github_username=user.github_oauth_username,
+        )
+        user.refresh_from_db()
+        return success_response("GitHub repositories disconnected successfully.")
 
 
 class RepoScanReportView(APIView):

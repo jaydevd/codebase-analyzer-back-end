@@ -3,6 +3,11 @@ from django.urls import path
 from auth.views import (
     ChangePasswordView,
     CustomTokenRefreshView,
+    GitHubAuthorizeView,
+    GitHubCallbackView,
+    GitHubUnlinkView,
+    GoogleAuthorizeView,
+    GoogleCallbackView,
     LoginView,
     LogoutView,
     ProfileView,
@@ -24,4 +29,9 @@ urlpatterns = [
         PasswordResetConfirmView.as_view(),
         name="auth-password-reset-confirm",
     ),
+    path("google/authorize/", GoogleAuthorizeView.as_view(), name="auth-google-authorize"),
+    path("google/callback/", GoogleCallbackView.as_view(), name="auth-google-callback"),
+    path("github/authorize/", GitHubAuthorizeView.as_view(), name="auth-github-authorize"),
+    path("github/callback/", GitHubCallbackView.as_view(), name="auth-github-callback"),
+    path("github/unlink/", GitHubUnlinkView.as_view(), name="auth-github-unlink"),
 ]

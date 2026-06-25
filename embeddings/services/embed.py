@@ -366,7 +366,7 @@ def embed_batch_task(self, batch, owner, repo, branch, commit_sha, blob_sha_map)
         return True
 
     except Exception as e:
-        if isinstance(e, self.Retry):
+        if isinstance(e, self.retry):
             raise
 
         if "429" in str(e) or "Too Many Requests" in str(e):
