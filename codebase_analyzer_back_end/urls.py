@@ -16,6 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import include, path
+from codebase_analyzer_back_end.views import health_check
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -23,4 +24,5 @@ urlpatterns = [
     path("api/github/", include("github.urls")),
     path("embed/", include("embeddings.urls")),
     path("api/chat/", include("core.urls")),
+    path("health/", health_check, name="health-check"),
 ]
