@@ -55,9 +55,18 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     github_installation_id = models.IntegerField(null=True, blank=True)
     github_username = models.CharField(max_length=255, null=True, blank=True)
+    github_installation_account_login = models.CharField(max_length=255, null=True, blank=True)
     github_installation_access_token = models.CharField(max_length=255, null=True, blank=True)
     github_installation_state = models.CharField(max_length=64, null=True, blank=True)
     is_github_installation_active = models.BooleanField(default=False)
+
+    # OAuth login fields
+    google_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
+    github_oauth_id = models.IntegerField(null=True, blank=True, unique=True)
+    github_oauth_username = models.CharField(max_length=255, null=True, blank=True)
+    github_oauth_token = models.TextField(null=True, blank=True)
+    github_oauth_context = models.JSONField(null=True, blank=True)
+    avatar_url = models.URLField(max_length=500, null=True, blank=True)
 
     is_deleted = models.BooleanField(default=False)
     objects = UserManager()
@@ -71,3 +80,11 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+    @property
+    def is_github_login_linked(self):
+        return bool(self.github_oauth_id)
+
+    @property
+    def is_github_repo_connected(self):
+        return bool(self.is_github_installation_active and self.github_installation_id)

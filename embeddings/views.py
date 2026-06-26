@@ -20,7 +20,9 @@ class IndexRepoView(APIView):
 
         user = User.objects.get(email=request.user)
         installation_id = user.github_installation_id
-        owner = user.github_username
+        owner = user.github_installation_account_login or user.github_username
+        if not installation_id or not owner:
+            return error_response("GitHub repositories are not connected.", status_code=400)
 
         github_repo = GithubRepos.objects.filter(
             repo_id=repo_id,

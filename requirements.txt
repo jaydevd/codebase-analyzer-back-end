@@ -14,6 +14,9 @@ PyJWT==2.8.0
 psycopg[binary]==3.2.13
 redis==7.4.0
 
+# OAuth / Social auth
+google-auth>=2.0.0
+
 # AI and retrieval stack
 # Upgraded to latest stable versions compatible with Python 3.13.
 # Do not pin google-generativeai separately here: that legacy SDK conflicts with

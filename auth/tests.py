@@ -3,6 +3,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core import mail
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
+from unittest.mock import patch
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.exceptions import TokenError
@@ -16,7 +17,7 @@ class AuthAPITestCase(APITestCase):
     login_url = "/auth/login/"
     refresh_url = "/auth/token/refresh/"
     logout_url = "/auth/logout/"
-    me_url = "/auth/me/"
+    me_url = "/auth/user/"
     change_password_url = "/auth/change-password/"
     password_reset_url = "/auth/password-reset/"
     password_reset_confirm_url = "/auth/password-reset/confirm/"
@@ -214,3 +215,163 @@ class AuthAPITestCase(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_github_authorize_returns_login_url_for_login_intent(self):
+        response = self.client.get("/auth/github/authorize/?intent=login")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("url", response.data["data"])
+
+    def test_github_authorize_requires_auth_for_link_intent(self):
+        response = self.client.get("/auth/github/authorize/?intent=link")
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @patch("auth.views.GitHubOAuthService.get_user_info")
+    @patch("auth.views.GitHubOAuthService.get_verified_primary_email")
+    @patch("auth.views.GitHubOAuthService.exchange_code_for_token")
+    def test_github_login_links_existing_email_user_without_repo_connection(
+        self,
+        exchange_code_for_token,
+        get_verified_primary_email,
+        get_user_info,
+    ):
+        user = self.create_user(email="github@example.com")
+        session = self.client.session
+        session["github_oauth_context"] = {
+            "state": "github-state",
+            "intent": "login",
+            "initiating_user_id": None,
+            "return_path": "/dashboard",
+        }
+        session.save()
+
+        exchange_code_for_token.return_value = {"access_token": "github-token"}
+        get_user_info.return_value = {
+            "id": 101,
+            "login": "octocat",
+            "avatar_url": "https://example.com/avatar.png",
+            "name": "Git Hub",
+            "email": "github@example.com",
+        }
+        get_verified_primary_email.return_value = "github@example.com"
+
+        response = self.client.get("/auth/github/callback/?code=test-code&state=github-state")
+
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        user.refresh_from_db()
+        self.assertEqual(user.github_oauth_id, 101)
+        self.assertEqual(user.github_oauth_username, "octocat")
+        self.assertFalse(user.is_github_installation_active)
+        self.assertIsNone(user.github_installation_id)
+
+    @patch("auth.views.GitHubOAuthService.get_user_info")
+    @patch("auth.views.GitHubOAuthService.get_verified_primary_email")
+    @patch("auth.views.GitHubOAuthService.exchange_code_for_token")
+    def test_github_link_attaches_login_to_authenticated_user(
+        self,
+        exchange_code_for_token,
+        get_verified_primary_email,
+        get_user_info,
+    ):
+        user, _ = self.authenticate()
+        session = self.client.session
+        session["github_oauth_context"] = {
+            "state": "github-link-state",
+            "intent": "link",
+            "initiating_user_id": str(user.id),
+            "return_path": "/user",
+        }
+        session.save()
+
+        exchange_code_for_token.return_value = {"access_token": "github-token"}
+        get_user_info.return_value = {
+            "id": 202,
+            "login": "linked-octocat",
+            "avatar_url": "https://example.com/avatar.png",
+            "name": "Linked User",
+            "email": "user@example.com",
+        }
+        get_verified_primary_email.return_value = "user@example.com"
+
+        response = self.client.get("/auth/github/callback/?code=test-code&state=github-link-state")
+
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertIn("action=github_login_linked", response.url)
+        user.refresh_from_db()
+        self.assertEqual(user.github_oauth_id, 202)
+        self.assertEqual(user.github_oauth_username, "linked-octocat")
+
+    @patch("auth.views.GitHubOAuthService.get_user_info")
+    @patch("auth.views.GitHubOAuthService.get_verified_primary_email")
+    @patch("auth.views.GitHubOAuthService.exchange_code_for_token")
+    def test_github_link_is_blocked_when_identity_is_already_linked_elsewhere(
+        self,
+        exchange_code_for_token,
+        get_verified_primary_email,
+        get_user_info,
+    ):
+        user, _ = self.authenticate()
+        self.create_user(
+            email="occupied@example.com",
+            github_oauth_id=303,
+            github_oauth_username="occupied-user",
+        )
+        session = self.client.session
+        session["github_oauth_context"] = {
+            "state": "github-link-conflict",
+            "intent": "link",
+            "initiating_user_id": str(user.id),
+            "return_path": "/user",
+        }
+        session.save()
+
+        exchange_code_for_token.return_value = {"access_token": "github-token"}
+        get_user_info.return_value = {
+            "id": 303,
+            "login": "occupied-user",
+            "avatar_url": "",
+            "name": "Occupied User",
+            "email": "user@example.com",
+        }
+        get_verified_primary_email.return_value = "user@example.com"
+
+        response = self.client.get("/auth/github/callback/?code=test-code&state=github-link-conflict")
+
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertIn("error=github_login_in_use", response.url)
+
+    @patch("auth.views.GitHubOAuthService.get_user_info")
+    @patch("auth.views.GitHubOAuthService.get_verified_primary_email")
+    @patch("auth.views.GitHubOAuthService.exchange_code_for_token")
+    def test_github_link_is_blocked_when_email_matches_another_user(
+        self,
+        exchange_code_for_token,
+        get_verified_primary_email,
+        get_user_info,
+    ):
+        user, _ = self.authenticate()
+        self.create_user(email="other@example.com")
+        session = self.client.session
+        session["github_oauth_context"] = {
+            "state": "github-email-conflict",
+            "intent": "link",
+            "initiating_user_id": str(user.id),
+            "return_path": "/user",
+        }
+        session.save()
+
+        exchange_code_for_token.return_value = {"access_token": "github-token"}
+        get_user_info.return_value = {
+            "id": 404,
+            "login": "new-user",
+            "avatar_url": "",
+            "name": "New User",
+            "email": "other@example.com",
+        }
+        get_verified_primary_email.return_value = "other@example.com"
+
+        response = self.client.get("/auth/github/callback/?code=test-code&state=github-email-conflict")
+
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertIn("error=github_email_in_use", response.url)
