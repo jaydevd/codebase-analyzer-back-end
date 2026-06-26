@@ -1,6 +1,7 @@
 import logging
 import traceback
 from celery import shared_task, chord
+from celery.exceptions import Retry as CeleryRetry
 import re
 import time
 import tiktoken
@@ -436,7 +437,7 @@ def embed_batch_task(self, batch, owner, repo, branch, commit_sha, blob_sha_map)
         return True
 
     except Exception as e:
-        if isinstance(e, self.retry):
+        if isinstance(e, CeleryRetry):
             raise
 
         if "429" in str(e) or "Too Many Requests" in str(e):
