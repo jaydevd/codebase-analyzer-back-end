@@ -290,8 +290,35 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
 
         logger.info("Dispatching %s batch(es) via chord for %s/%s", len(batches), owner, repo)
 
-        callback = finalize_index.s(repo_id=repo_id, branch=branch, commit_sha=commit_sha, scan_id=scan_id)
-        errback = handle_chord_error.s(repo_id=repo_id, branch=branch, scan_id=scan_id)
+        callback = (
+            finalize_index.s(
+                repo_id=repo_id,
+                branch=branch,
+                commit_sha=commit_sha,
+                scan_id=scan_id,
+            )
+            .on_error(
+                handle_chord_error.s(
+                    repo_id=repo_id,
+                    branch=branch,
+                    scan_id=scan_id,
+                )
+            )
+        )
+        
+        header = [
+            embed_batch_task.s(
+                batch=batch,
+                owner=owner,
+                repo=repo,
+                branch=branch,
+                commit_sha=commit_sha,
+                blob_sha_map=blob_sha_map,
+            )
+            for batch in batches
+        ]
+        
+        chord(header)(callback)
 
         header = [
             embed_batch_task.s(
@@ -306,7 +333,6 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
         ]
 
         chord_result = chord(header)(callback)
-        chord_result.on_error(errback)
 
         logger.info("Chord dispatched for %s/%s — %s batch(es)", owner, repo, len(batches))
 
