@@ -10,6 +10,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from auth.oauth import GitHubOAuthService, GoogleOAuthService
+from core.models import ChatSession
+from github.models import GithubRepos
 from auth.serializers import (
     ChangePasswordSerializer,
     CustomTokenRefreshSerializer,
@@ -113,6 +115,16 @@ class ProfileView(generics.RetrieveUpdateAPIView):
             "Profile updated successfully.",
             data=UserSerializer(user).data,
         )
+
+
+    def delete(self, request, *args, **kwargs):
+        user = request.user
+        user.is_deleted = True
+        user.is_active = False
+        user.save(update_fields=["is_deleted", "is_active", "updated_at"])
+        ChatSession.objects.filter(user_id=user).update(is_deleted=True)
+        GithubRepos.objects.filter(user_id=user).update(is_deleted=True)
+        return success_response("Account deleted successfully.")
 
 
 class ChangePasswordView(APIView):

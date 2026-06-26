@@ -14,5 +14,5 @@ app.config_from_object(
     "django.conf:settings",
     namespace="CELERY"
 )
-
+app.conf.task_allow_error_cb_on_chord_header = True
 app.autodiscover_tasks()
