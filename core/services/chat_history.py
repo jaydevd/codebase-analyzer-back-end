@@ -4,6 +4,7 @@ from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 from core.models import ChatMessage
+from common.constants import CHAT_HISTORY_MAX_MESSAGES
 
 
 class DjangoChatMessageHistory(BaseChatMessageHistory):
@@ -16,10 +17,10 @@ class DjangoChatMessageHistory(BaseChatMessageHistory):
     def messages(self) -> List[BaseMessage]:
         chat_msgs = ChatMessage.objects.filter(
             chat_id=self.session_id,
-        ).order_by("created_at")
+        ).order_by("-created_at")[:CHAT_HISTORY_MAX_MESSAGES]
 
         result: List[BaseMessage] = []
-        for msg in chat_msgs:
+        for msg in reversed(chat_msgs):
             if msg.prompt:
                 result.append(HumanMessage(content=msg.prompt))
             if msg.content and msg.content != "No content found":
