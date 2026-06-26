@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from core.models import ChatSession, ChatMessage
+from common.constants import MAX_ATTACHED_FILE_BYTES
 
 
 # ---------------------------------------------------------------------------
@@ -9,6 +10,11 @@ from core.models import ChatSession, ChatMessage
 class AttachedFileSerializer(serializers.Serializer):
     filename = serializers.CharField(required=True)
     content = serializers.CharField(required=True, allow_blank=True)
+
+    def validate_content(self, value):
+        if len(value) > MAX_ATTACHED_FILE_BYTES:
+            raise serializers.ValidationError("File content exceeds 1MB limit.")
+        return value
 
 
 class QueryHistoryItemSerializer(serializers.Serializer):

@@ -52,6 +52,15 @@ EXCLUDED_FILENAMES = {
     'Gemfile.lock', 'poetry.lock', 'Cargo.lock',
 }
 
-EMBED_BATCH_SIZE = 128 
+EMBED_BATCH_SIZE = 128
 VECTOR_SIZE = 1024  # voyage-code-3 outputs 1024-dim vectors
 MAX_FILE_BYTES = 100_000
+
+# Token and memory budget
+CHUNK_TARGET_TOKENS = 600       # target per chunk for retrieval granularity
+CHUNK_MAX_TOKENS = 2000         # hard max per chunk (small files embedded whole)
+BATCH_MAX_CHUNKS = 128          # chunks per API call (voyage-code-3 sweet spot)
+REPO_MAX_TOKENS = 20_000_000    # hard cap per repo ingestion budget
+QUERY_MAX_CONTEXT_TOKENS = 40_000  # LLM context token budget
+CHAT_HISTORY_MAX_MESSAGES = 20     # recent exchanges to include in context
+MAX_ATTACHED_FILE_BYTES = 1_000_000  # 1MB limit on attached file content

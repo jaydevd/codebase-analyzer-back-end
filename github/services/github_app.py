@@ -17,6 +17,9 @@ GITHUB_BASE_URL = "https://api.github.com"
 
 _blob_cache: dict[str, str] = {}
 
+def clear_blob_cache():
+    _blob_cache.clear()
+
 class GitHubAppService:
     """GitHub App authentication and installation helper."""
 
@@ -280,3 +283,4 @@ class GitHubAppService:
 
 
 github_service = GitHubAppService()
+github_service.clear_blob_cache = clear_blob_cache

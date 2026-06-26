@@ -9,6 +9,7 @@ class RepoIndexStatus(models.TextChoices):
     NOT_SCANNED = "not_scanned", "Not Scanned"
     SCANNING = "scanning", "Scanning"
     SCANNED = "scanned", "Scanned"
+    PARTIALLY_SCANNED = "partially_scanned", "Partially Scanned"
     FAILED = "failed", "Failed"
 
 
@@ -73,6 +74,7 @@ class RepoBranch(models.Model):
 class BranchScanStatus(models.TextChoices):
     SCANNING = "scanning", "Scanning"
     SCANNED = "scanned", "Scanned"
+    PARTIALLY_SCANNED = "partially_scanned", "Partially Scanned"
     FAILED = "failed", "Failed"
 
 

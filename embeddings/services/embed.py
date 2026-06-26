@@ -3,6 +3,7 @@ import traceback
 from celery import shared_task, chord
 import re
 import time
+import tiktoken
 
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct, Filter,
@@ -20,10 +21,14 @@ from common.constants import (
   EXCLUDED_FILENAMES,
   EMBED_BATCH_SIZE,
   VECTOR_SIZE,
-  MAX_FILE_BYTES
+  MAX_FILE_BYTES,
+  CHUNK_TARGET_TOKENS,
+  CHUNK_MAX_TOKENS,
+  BATCH_MAX_CHUNKS,
+  REPO_MAX_TOKENS,
 )
-from github.services.github_app import github_service
-from github.models import GithubRepos, RepoBranch, RepoIndexStatus, BranchScan, ScanError
+from github.services.github_app import github_service, clear_blob_cache
+from github.models import GithubRepos, RepoBranch, RepoIndexStatus, BranchScan, BranchScanStatus, ScanError
 from common.models import get_unix_timestamp
 from embeddings.services.rate_limiter import VoyageRateLimiter
 
@@ -124,11 +129,12 @@ class EmbeddingService:
         chunk['embedding'] = embedding
     return batch
 
-  def chunk_file(self, path: str, content: str, max_chars: int = 1500) -> list[dict]:
+  def chunk_file(self, path: str, content: str, target_tokens: int = CHUNK_TARGET_TOKENS, max_tokens: int = CHUNK_MAX_TOKENS) -> list[dict]:
+    enc = tiktoken.get_encoding("cl100k_base")
     lines = content.splitlines()
     chunks = []
     current_chunk_lines = []
-    current_chars = 0
+    current_tokens = 0
     start_line = 0
 
     boundary_pattern = re.compile(
@@ -136,10 +142,12 @@ class EmbeddingService:
     )
 
     for i, line in enumerate(lines):
-        is_boundary = boundary_pattern.match(line) and current_chars > 0
-        would_overflow = (current_chars + len(line)) > max_chars
+        line_tokens = len(enc.encode(line))
+        is_boundary = boundary_pattern.match(line) and current_tokens > 0
+        would_overflow = current_tokens + line_tokens > max_tokens
+        past_target = current_tokens >= target_tokens
 
-        if (is_boundary or would_overflow) and current_chunk_lines:
+        if (would_overflow or (is_boundary and past_target)) and current_chunk_lines:
             chunks.append({
                 'text': '\n'.join(current_chunk_lines),
                 'chunk_index': len(chunks),
@@ -148,11 +156,11 @@ class EmbeddingService:
                 'file_path': path,
             })
             current_chunk_lines = []
-            current_chars = 0
+            current_tokens = 0
             start_line = i
 
         current_chunk_lines.append(line)
-        current_chars += len(line)
+        current_tokens += line_tokens
 
     if current_chunk_lines:
         chunks.append({
@@ -176,23 +184,9 @@ class EmbeddingService:
 
   def group_batches(self, all_chunks: list[dict]) -> list[list[dict]]:
     batches = []
-    current_batch = []
-    current_tokens = 0
-
-    for chunk in all_chunks:
-        chunk_tokens = rate_limiter.estimate_tokens([chunk['text']])
-        if current_tokens + chunk_tokens > 2500 and current_batch:
-            batches.append(current_batch)
-            current_batch = []
-            current_tokens = 0
-
-        current_batch.append(chunk)
-        current_tokens += chunk_tokens
-
-    if current_batch:
-        batches.append(current_batch)
-
-    logger.info("Created %s embedding batches", len(batches))
+    for i in range(0, len(all_chunks), BATCH_MAX_CHUNKS):
+        batches.append(all_chunks[i:i + BATCH_MAX_CHUNKS])
+    logger.info("Created %s embedding batches (%s chunks/batch)", len(batches), BATCH_MAX_CHUNKS)
     return batches
 
   def index_branch(
@@ -270,6 +264,21 @@ def _mark_index_failed(repo_id, branch, scan_id, error_message, error_type="Inde
     logger.error("Indexing failed for repo=%s branch=%s: %s", repo_id, branch, error_message)
 
 
+def _mark_index_partial(repo_id, branch, commit_sha, scan_id):
+    now = get_unix_timestamp()
+    RepoBranch.objects.filter(repo__repo_id=repo_id, name=branch).update(
+        status=RepoIndexStatus.PARTIALLY_SCANNED,
+        commit_sha=commit_sha,
+        last_indexed_at=now,
+    )
+    if scan_id:
+        BranchScan.objects.filter(id=scan_id).update(
+            status=BranchScanStatus.PARTIALLY_SCANNED,
+            completed_at=now,
+        )
+    logger.info("Indexing partial for repo=%s branch=%s (20M token cap reached)", repo_id, branch)
+
+
 @shared_task(bind=True)
 def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, installation_id, repo_id, scan_id=None):
     try:
@@ -278,17 +287,62 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
         logger.info("index_branch_task: preparing data for %s/%s (%s)", owner, repo, branch)
 
         filtered_files = service.filter_tree(tree_response)
-        file_contents = github_service.fetch_all_blobs(installation_id, owner, repo, filtered_files)
-        blob_sha_map = {e['path']: e['sha'] for e in filtered_files}
-        all_chunks = service.chunk_all_files(file_contents)
-        batches = service.group_batches(all_chunks)
+
+        estimated_total = sum(e.get('size', 0) for e in filtered_files) // 4
+        over_budget = estimated_total > REPO_MAX_TOKENS
+        if over_budget:
+            logger.warning(
+                "Repo %s/%s exceeds 20M token budget (~%s estimated). Will index partially.",
+                owner, repo, estimated_total,
+            )
+
+        clear_blob_cache()
+
+        blob_sha_map = {}
+        batches = []
+        current_batch = []
+        total_embedded_tokens = 0
+        hit_token_cap = False
+        enc = tiktoken.get_encoding("cl100k_base")
+
+        for entry in filtered_files:
+            if hit_token_cap:
+                break
+
+            try:
+                content = github_service.fetch_blob(installation_id, owner, repo, entry['sha'])
+            except Exception as e:
+                logger.warning("Skipping %s: %s", entry['path'], e)
+                continue
+
+            blob_sha_map[entry['path']] = entry['sha']
+            file_chunks = service.chunk_file(entry['path'], content)
+
+            for chunk in file_chunks:
+                chunk_tokens = len(enc.encode(chunk['text']))
+                if total_embedded_tokens + chunk_tokens > REPO_MAX_TOKENS:
+                    hit_token_cap = True
+                    break
+                total_embedded_tokens += chunk_tokens
+                current_batch.append(chunk)
+                if len(current_batch) >= BATCH_MAX_CHUNKS:
+                    batches.append(current_batch)
+                    current_batch = []
+
+        if current_batch:
+            batches.append(current_batch)
+
+        clear_blob_cache()
 
         if not batches:
             logger.warning("No indexable files for %s/%s (%s)", owner, repo, branch)
             _mark_index_success(repo_id, branch, commit_sha, scan_id)
             return
 
-        logger.info("Dispatching %s batch(es) via chord for %s/%s", len(batches), owner, repo)
+        logger.info(
+            "Dispatching %s batch(es) via chord for %s/%s (partial=%s, tokens=%s)",
+            len(batches), owner, repo, hit_token_cap, total_embedded_tokens,
+        )
 
         callback = (
             finalize_index.s(
@@ -296,6 +350,7 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
                 branch=branch,
                 commit_sha=commit_sha,
                 scan_id=scan_id,
+                partially_scanned=hit_token_cap,
             )
             .on_error(
                 handle_chord_error.s(
@@ -305,7 +360,7 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
                 )
             )
         )
-        
+
         header = [
             embed_batch_task.s(
                 batch=batch,
@@ -317,22 +372,8 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
             )
             for batch in batches
         ]
-        
+
         chord(header)(callback)
-
-        header = [
-            embed_batch_task.s(
-                batch=batch,
-                owner=owner,
-                repo=repo,
-                branch=branch,
-                commit_sha=commit_sha,
-                blob_sha_map=blob_sha_map,
-            )
-            for batch in batches
-        ]
-
-        chord_result = chord(header)(callback)
 
         logger.info("Chord dispatched for %s/%s — %s batch(es)", owner, repo, len(batches))
 
@@ -347,12 +388,15 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
 
 
 @shared_task
-def finalize_index(results, repo_id, branch, commit_sha, scan_id):
+def finalize_index(results, repo_id, branch, commit_sha, scan_id, partially_scanned=False):
     failed_count = sum(1 for r in results if not r)
     total = len(results)
 
     if failed_count == 0:
-        _mark_index_success(repo_id, branch, commit_sha, scan_id)
+        if partially_scanned:
+            _mark_index_partial(repo_id, branch, commit_sha, scan_id)
+        else:
+            _mark_index_success(repo_id, branch, commit_sha, scan_id)
     else:
         _mark_index_failed(
             repo_id, branch, scan_id,
