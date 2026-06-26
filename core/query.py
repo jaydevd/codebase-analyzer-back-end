@@ -11,15 +11,9 @@ from common.constants import (
 )
 from embeddings.services.embed import embedding_service
 from core.services.langchain_service import langchain_service
+from core.system_prompt import SYSTEM_PROMPT
 
 MAX_CONTEXT_TOKENS = 40000
-
-SYSTEM_PROMPT = (
-    "You are a codebase analysis assistant. Answer the user's question using only "
-    "the provided code context. If the context doesn't contain enough information, "
-    "say so explicitly rather than guessing. Always reference file paths and line "
-    "numbers when citing code."
-)
 
 
 def process_attached_files(files: list[dict]) -> list[dict]:
