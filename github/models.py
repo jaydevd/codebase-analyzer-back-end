@@ -8,6 +8,7 @@ from common.models import get_unix_timestamp
 class RepoIndexStatus(models.TextChoices):
     NOT_SCANNED = "not_scanned", "Not Scanned"
     SCANNING = "scanning", "Scanning"
+    INDEXING = "indexing", "Indexing"
     SCANNED = "scanned", "Scanned"
     PARTIALLY_SCANNED = "partially_scanned", "Partially Scanned"
     FAILED = "failed", "Failed"
@@ -73,6 +74,7 @@ class RepoBranch(models.Model):
 
 class BranchScanStatus(models.TextChoices):
     SCANNING = "scanning", "Scanning"
+    INDEXING = "indexing", "Indexing"
     SCANNED = "scanned", "Scanned"
     PARTIALLY_SCANNED = "partially_scanned", "Partially Scanned"
     FAILED = "failed", "Failed"

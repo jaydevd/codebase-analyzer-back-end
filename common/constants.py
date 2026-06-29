@@ -33,6 +33,10 @@ qdrant = QdrantClient(
     api_key=QDRANT_API_KEY # only needed for Qdrant Cloud
 )
 
+# Voyage rate limits
+VOYAGE_RPM_LIMIT = int(os.getenv("VOYAGE_RPM_LIMIT", "3"))
+VOYAGE_TPM_LIMIT = int(os.getenv("VOYAGE_TPM_LIMIT", "10000"))
+
 # Embeddings variables
 EXCLUDED_DIRS = [
     'node_modules/', 'vendor/', '.git/', 'dist/', 'build/', 'out/',
@@ -60,6 +64,7 @@ MAX_FILE_BYTES = 100_000
 CHUNK_TARGET_TOKENS = 600       # target per chunk for retrieval granularity
 CHUNK_MAX_TOKENS = 2000         # hard max per chunk (small files embedded whole)
 BATCH_MAX_CHUNKS = 128          # chunks per API call (voyage-code-3 sweet spot)
+BATCH_MAX_TOKENS = int(os.getenv("BATCH_MAX_TOKENS", str(VOYAGE_TPM_LIMIT // max(VOYAGE_RPM_LIMIT, 1))))  # tokens per batch to stay within rate limits
 REPO_MAX_TOKENS = 20_000_000    # hard cap per repo ingestion budget
 QUERY_MAX_CONTEXT_TOKENS = 40_000  # LLM context token budget
 CHAT_HISTORY_MAX_MESSAGES = 20     # recent exchanges to include in context

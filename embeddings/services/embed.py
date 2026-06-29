@@ -26,6 +26,7 @@ from common.constants import (
   CHUNK_TARGET_TOKENS,
   CHUNK_MAX_TOKENS,
   BATCH_MAX_CHUNKS,
+  BATCH_MAX_TOKENS,
   REPO_MAX_TOKENS,
 )
 from github.services.github_app import github_service, clear_blob_cache
@@ -115,9 +116,41 @@ class EmbeddingService:
       return False
     return True
 
+  FILE_PRIORITY = {ext: priority for priority, exts in enumerate([
+      {'.py', '.js', '.ts', '.jsx', '.tsx', '.go', '.rs', '.java', '.rb', '.php', '.c', '.cpp', '.h', '.hpp', '.cs', '.swift', '.kt'},
+      {'.json', '.yaml', '.yml', '.toml', '.xml', '.ini', '.cfg'},
+      {'.md', '.rst', '.txt', '.html', '.css', '.scss', '.less'},
+  ]) for ext in exts}
+
+  def priority(self, path: str) -> int:
+    ext = '.' + path.split('.')[-1] if '.' in path else ''
+    return self.FILE_PRIORITY.get(ext, 99)
+
   def filter_tree(self, tree_response: dict) -> list[dict]:
     all_blobs = [e for e in tree_response['tree'] if e['type'] == 'blob']
     return [e for e in all_blobs if self.should_index(e)]
+
+  def get_indexed_blob_shas(self, owner: str, repo: str, branch: str, commit_sha: str) -> set[str]:
+    existing_shas = set()
+    next_offset = None
+    while True:
+      results, next_offset = qdrant.scroll(
+          collection_name=QDRANT_COLLECTION,
+          scroll_filter=Filter(
+              must=[
+                  FieldCondition(key="repo", match=MatchValue(value=f"{owner}/{repo}")),
+                  FieldCondition(key="branch", match=MatchValue(value=branch)),
+                  FieldCondition(key="commit_sha", match=MatchValue(value=commit_sha)),
+              ]
+          ),
+          limit=10000,
+          offset=next_offset,
+      )
+      for point in results:
+          existing_shas.add(point.payload.get("blob_sha", ""))
+      if not next_offset:
+          break
+    return existing_shas
 
   def embed_chunks_batch(self, batch: list[dict]) -> list[dict]:
     batch = [c for c in batch if c.get('text', '').strip()]
@@ -305,18 +338,35 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
                 owner, repo, estimated_total,
             )
 
+        # Item 5: Sort files by priority so important content gets indexed first
+        filtered_files.sort(key=lambda e: service.priority(e['path']))
+
         clear_blob_cache()
+
+        # Item 4: Check which blob SHAs are already indexed for this commit
+        already_indexed = service.get_indexed_blob_shas(owner, repo, branch, commit_sha)
+        if already_indexed:
+            logger.info("Found %s already-indexed blobs for %s/%s @ %s", len(already_indexed), owner, repo, commit_sha)
 
         blob_sha_map = {}
         batches = []
         current_batch = []
+        current_batch_tokens = 0
         total_embedded_tokens = 0
         hit_token_cap = False
         enc = tiktoken.get_encoding("cl100k_base")
 
+        # Item 1: Token-aware batch size
+        batch_max_tokens = max(BATCH_MAX_TOKENS, 1)
+
         for entry in filtered_files:
             if hit_token_cap:
                 break
+
+            # Item 4: Skip already-indexed blobs
+            if entry['sha'] in already_indexed:
+                blob_sha_map[entry['path']] = entry['sha']
+                continue
 
             try:
                 content = github_service.fetch_blob(installation_id, owner, repo, entry['sha'])
@@ -333,10 +383,13 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
                     hit_token_cap = True
                     break
                 total_embedded_tokens += chunk_tokens
-                current_batch.append(chunk)
-                if len(current_batch) >= BATCH_MAX_CHUNKS:
+                # Item 1: Flush batch by token budget, not by chunk count
+                if current_batch_tokens + chunk_tokens > batch_max_tokens and current_batch:
                     batches.append(current_batch)
                     current_batch = []
+                    current_batch_tokens = 0
+                current_batch.append(chunk)
+                current_batch_tokens += chunk_tokens
 
         if current_batch:
             batches.append(current_batch)
@@ -348,9 +401,18 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
             _mark_index_success(repo_id, branch, commit_sha, scan_id)
             return
 
+        # Item 6: Set status to INDEXING before dispatching batches
+        RepoBranch.objects.filter(repo__repo_id=repo_id, name=branch).update(
+            status=RepoIndexStatus.INDEXING,
+        )
+        if scan_id:
+            BranchScan.objects.filter(id=scan_id).update(
+                status=RepoIndexStatus.INDEXING,
+            )
+
         logger.info(
-            "Dispatching %s batch(es) via chord for %s/%s (partial=%s, tokens=%s)",
-            len(batches), owner, repo, hit_token_cap, total_embedded_tokens,
+            "Dispatching %s batch(es) via chord for %s/%s (partial=%s, tokens=%s, batch_max_tokens=%s)",
+            len(batches), owner, repo, hit_token_cap, total_embedded_tokens, batch_max_tokens,
         )
 
         callback = (
