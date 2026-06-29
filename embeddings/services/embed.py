@@ -120,6 +120,10 @@ class EmbeddingService:
     return [e for e in all_blobs if self.should_index(e)]
 
   def embed_chunks_batch(self, batch: list[dict]) -> list[dict]:
+    batch = [c for c in batch if c.get('text', '').strip()]
+    if not batch:
+        logger.warning("embed_chunks_batch received empty batch after filtering")
+        return batch
     texts = [c['text'] for c in batch]
     result = voyage_client.embed(
         texts,
@@ -149,13 +153,15 @@ class EmbeddingService:
         past_target = current_tokens >= target_tokens
 
         if (would_overflow or (is_boundary and past_target)) and current_chunk_lines:
-            chunks.append({
-                'text': '\n'.join(current_chunk_lines),
-                'chunk_index': len(chunks),
-                'start_line': start_line,
-                'end_line': i - 1,
-                'file_path': path,
-            })
+            text = '\n'.join(current_chunk_lines)
+            if text.strip():
+                chunks.append({
+                    'text': text,
+                    'chunk_index': len(chunks),
+                    'start_line': start_line,
+                    'end_line': i - 1,
+                    'file_path': path,
+                })
             current_chunk_lines = []
             current_tokens = 0
             start_line = i
@@ -164,13 +170,15 @@ class EmbeddingService:
         current_tokens += line_tokens
 
     if current_chunk_lines:
-        chunks.append({
-            'text': '\n'.join(current_chunk_lines),
-            'chunk_index': len(chunks),
-            'start_line': start_line,
-            'end_line': len(lines) - 1,
-            'file_path': path,
-        })
+        text = '\n'.join(current_chunk_lines)
+        if text.strip():
+            chunks.append({
+                'text': text,
+                'chunk_index': len(chunks),
+                'start_line': start_line,
+                'end_line': len(lines) - 1,
+                'file_path': path,
+            })
 
     return chunks
 
@@ -419,6 +427,10 @@ def handle_chord_error(request, exc, traceback, repo_id, branch, scan_id):
 @shared_task(bind=True, max_retries=EMBED_BATCH_MAX_RETRIES, default_retry_delay=60)
 def embed_batch_task(self, batch, owner, repo, branch, commit_sha, blob_sha_map):
     try:
+        batch = [c for c in batch if c.get('text', '').strip()]
+        if not batch:
+            logger.warning("Batch had no non-empty chunks, skipping")
+            return True
         texts = [c['text'] for c in batch]
         tokens = rate_limiter.estimate_tokens(texts)
 
