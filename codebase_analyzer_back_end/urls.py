@@ -16,6 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import include, path
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from codebase_analyzer_back_end.views import health_check
 
 urlpatterns = [
@@ -25,4 +26,6 @@ urlpatterns = [
     path("embed/", include("embeddings.urls")),
     path("api/chat/", include("core.urls")),
     path("health/", health_check, name="health-check"),
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
 ]

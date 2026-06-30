@@ -1,10 +1,15 @@
-from rest_framework import status
+from drf_spectacular.utils import extend_schema, extend_schema_view, inline_serializer
+from rest_framework import serializers, status
 from rest_framework.views import APIView
 from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from auth.models import User
 
 from common.responses import error_response, success_response
+from common.swagger import (
+    build_success_envelope_serializer,
+    build_error_envelope_serializer,
+)
 from core.query import (
     process_attached_files,
     search_codebase,
@@ -23,6 +28,18 @@ from core.serializers import (
 from core.models import ChatSession
 
 
+@extend_schema(
+    tags=["Chat"],
+    request=QueryRequestSerializer,
+    responses={
+        200: build_success_envelope_serializer(
+            "QueryResponse",
+            inline_serializer("QueryData", fields={"answer": serializers.CharField()}),
+        ),
+        400: build_error_envelope_serializer("QueryError"),
+        500: build_error_envelope_serializer("QueryServerError"),
+    },
+)
 class QueryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -82,6 +99,14 @@ class QueryView(APIView):
         )
 
 
+@extend_schema(
+    tags=["Chat"],
+    request=CreateChatSessionSerializer,
+    responses={
+        201: build_success_envelope_serializer("CreateSessionResponse", ChatSessionSerializer),
+        400: build_error_envelope_serializer("CreateSessionError"),
+    },
+)
 class CreateChatSessionView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -102,6 +127,13 @@ class CreateChatSessionView(APIView):
         )
 
 
+@extend_schema(
+    tags=["Chat"],
+    responses={
+        200: build_success_envelope_serializer("ChatHistoryResponse", ChatSessionSerializer(many=True)),
+        401: build_error_envelope_serializer("ChatHistoryAuthError"),
+    },
+)
 class GetChatHistoryView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -116,6 +148,24 @@ class GetChatHistoryView(APIView):
         )
 
 
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Chat"],
+        responses={
+            200: build_success_envelope_serializer("SessionDetailResponse", ChatSessionDetailSerializer),
+            404: build_error_envelope_serializer("SessionDetailNotFound"),
+        },
+    ),
+    patch=extend_schema(
+        tags=["Chat"],
+        request=UpdateChatSessionSerializer,
+        responses={
+            200: build_success_envelope_serializer("SessionUpdateResponse", ChatSessionSerializer),
+            400: build_error_envelope_serializer("SessionUpdateError"),
+            404: build_error_envelope_serializer("SessionUpdateNotFound"),
+        },
+    ),
+)
 class ChatSessionDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
