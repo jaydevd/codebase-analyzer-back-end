@@ -1,12 +1,36 @@
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from embeddings.services.embed import index_branch_task
 from common.models import get_unix_timestamp
 from common.responses import error_response, success_response
+from common.swagger import (
+    build_success_envelope_serializer,
+    build_error_envelope_serializer,
+)
 from github.models import GithubRepos, RepoBranch, RepoIndexStatus, BranchScan
 from github.services.github_app import github_service
 from auth.models import User
 
+_index_request_serializer = inline_serializer(
+    "IndexRepoRequest",
+    fields={
+        "repo_id": serializers.IntegerField(),
+        "branch": serializers.CharField(),
+        "commit_sha": serializers.CharField(),
+    },
+)
+
+@extend_schema(
+    tags=["Embeddings"],
+    request=_index_request_serializer,
+    responses={
+        200: build_success_envelope_serializer("IndexRepoResponse"),
+        400: build_error_envelope_serializer("IndexRepoError"),
+        404: build_error_envelope_serializer("IndexRepoNotFound"),
+    },
+)
 class IndexRepoView(APIView):
     permission_classes = [IsAuthenticated]
 

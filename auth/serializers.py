@@ -2,6 +2,7 @@ from django.contrib.auth import authenticate, get_user_model, password_validatio
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
@@ -49,12 +50,15 @@ class UserSerializer(serializers.ModelSerializer):
             "avatar_url",
         )
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_github_username(self, obj):
         return obj.github_installation_account_login or obj.github_oauth_username or obj.github_username
 
+    @extend_schema_field(serializers.BooleanField())
     def get_is_github_login_linked(self, obj):
         return obj.is_github_login_linked
 
+    @extend_schema_field(serializers.BooleanField())
     def get_is_github_repo_connected(self, obj):
         return obj.is_github_repo_connected
 

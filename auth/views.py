@@ -3,15 +3,21 @@ import secrets
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.shortcuts import redirect
-from rest_framework import generics, status
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+    inline_serializer,
+)
+from drf_spectacular.types import OpenApiTypes
+from rest_framework import generics, serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from auth.oauth import GitHubOAuthService, GoogleOAuthService
-from core.models import ChatSession
-from github.models import GithubRepos
 from auth.serializers import (
     ChangePasswordSerializer,
     CustomTokenRefreshSerializer,
@@ -26,10 +32,22 @@ from auth.serializers import (
 )
 from auth.services import AuthEmailService
 from common.responses import error_response, success_response
+from common.swagger import (
+    build_success_envelope_serializer,
+    build_error_envelope_serializer,
+)
 
 User = get_user_model()
 
 
+@extend_schema(
+    tags=["Auth"],
+    request=RegisterSerializer,
+    responses={
+        201: build_success_envelope_serializer("RegisterResponse", UserSerializer),
+        400: build_error_envelope_serializer("RegisterError"),
+    },
+)
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
@@ -46,6 +64,24 @@ class RegisterView(generics.CreateAPIView):
         )
 
 
+@extend_schema(
+    tags=["Auth"],
+    request=LoginSerializer,
+    responses={
+        200: build_success_envelope_serializer(
+            "LoginResponse",
+            inline_serializer(
+                "LoginData",
+                fields={
+                    "access": serializers.CharField(),
+                    "refresh": serializers.CharField(),
+                    "user": UserSerializer(),
+                },
+            ),
+        ),
+        401: build_error_envelope_serializer("LoginError"),
+    },
+)
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
@@ -62,6 +98,25 @@ class LoginView(APIView):
         return success_response("Login successful.", data=data)
 
 
+@extend_schema(
+    tags=["Auth"],
+    request=CustomTokenRefreshSerializer,
+    responses={
+        200: build_success_envelope_serializer(
+            "TokenRefreshResponse",
+            inline_serializer(
+                "TokenRefreshData",
+                fields={
+                    "access": serializers.CharField(),
+                    "access_token_expiration": serializers.IntegerField(required=False),
+                    "refresh": serializers.CharField(required=False),
+                    "refresh_token_expiration": serializers.IntegerField(required=False),
+                },
+            ),
+        ),
+        401: build_error_envelope_serializer("TokenRefreshError"),
+    },
+)
 class CustomTokenRefreshView(TokenRefreshView):
     permission_classes = [AllowAny]
     serializer_class = CustomTokenRefreshSerializer
@@ -71,6 +126,15 @@ class CustomTokenRefreshView(TokenRefreshView):
         return success_response("Token refreshed successfully.", data=response.data)
 
 
+@extend_schema(
+    tags=["Auth"],
+    request=LogoutSerializer,
+    responses={
+        205: build_success_envelope_serializer("LogoutResponse"),
+        400: build_error_envelope_serializer("LogoutError"),
+        500: build_error_envelope_serializer("LogoutServerError"),
+    },
+)
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -88,6 +152,30 @@ class LogoutView(APIView):
         return success_response("Logout successful.", status_code=status.HTTP_205_RESET_CONTENT)
 
 
+@extend_schema_view(
+    get=extend_schema(
+        tags=["Auth"],
+        responses={
+            200: build_success_envelope_serializer("ProfileResponse", UserSerializer),
+            401: build_error_envelope_serializer("ProfileAuthError"),
+        },
+    ),
+    patch=extend_schema(
+        tags=["Auth"],
+        request=UpdateProfileSerializer,
+        responses={
+            200: build_success_envelope_serializer("ProfileUpdateResponse", UserSerializer),
+            400: build_error_envelope_serializer("ProfileUpdateError"),
+        },
+    ),
+    delete=extend_schema(
+        tags=["Auth"],
+        responses={
+            200: build_success_envelope_serializer("AccountDeleteResponse"),
+            401: build_error_envelope_serializer("AccountDeleteAuthError"),
+        },
+    ),
+)
 class ProfileView(generics.RetrieveUpdateAPIView):
     permission_classes = [IsAuthenticated]
 
@@ -127,6 +215,14 @@ class ProfileView(generics.RetrieveUpdateAPIView):
         return success_response("Account deleted successfully.")
 
 
+@extend_schema(
+    tags=["Auth"],
+    request=ChangePasswordSerializer,
+    responses={
+        200: build_success_envelope_serializer("ChangePasswordResponse"),
+        400: build_error_envelope_serializer("ChangePasswordError"),
+    },
+)
 class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -140,6 +236,14 @@ class ChangePasswordView(APIView):
         return success_response("Password changed successfully.")
 
 
+@extend_schema(
+    tags=["Auth"],
+    request=PasswordResetRequestSerializer,
+    responses={
+        200: build_success_envelope_serializer("PasswordResetRequestResponse"),
+        400: build_error_envelope_serializer("PasswordResetRequestError"),
+    },
+)
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
 
@@ -157,6 +261,14 @@ class PasswordResetRequestView(APIView):
         )
 
 
+@extend_schema(
+    tags=["Auth"],
+    request=PasswordResetConfirmSerializer,
+    responses={
+        200: build_success_envelope_serializer("PasswordResetConfirmResponse"),
+        400: build_error_envelope_serializer("PasswordResetConfirmError"),
+    },
+)
 class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
 
@@ -170,6 +282,12 @@ class PasswordResetConfirmView(APIView):
         return success_response("Password has been reset successfully.")
 
 
+@extend_schema(
+    tags=["Auth"],
+    responses={
+        302: OpenApiResponse(description="Redirect to Google OAuth consent URL"),
+    },
+)
 class GoogleAuthorizeView(APIView):
     permission_classes = [AllowAny]
 
@@ -183,6 +301,16 @@ class GoogleAuthorizeView(APIView):
         return redirect(url)
 
 
+@extend_schema(
+    tags=["Auth"],
+    parameters=[
+        OpenApiParameter(name="code", type=str, location=OpenApiParameter.QUERY, required=False, description="Authorization code from Google"),
+        OpenApiParameter(name="state", type=str, location=OpenApiParameter.QUERY, required=False, description="State parameter for CSRF validation"),
+    ],
+    responses={
+        302: OpenApiResponse(description="Redirect to frontend with access/refresh tokens or error"),
+    },
+)
 class GoogleCallbackView(APIView):
     permission_classes = [AllowAny]
 
@@ -247,6 +375,35 @@ class GoogleCallbackView(APIView):
         return dj_redirect(frontend_url)
 
 
+@extend_schema(
+    tags=["Auth"],
+    parameters=[
+        OpenApiParameter(
+            name="intent",
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description="OAuth intent: 'login' (default) or 'link'",
+            enum=["login", "link"],
+        ),
+        OpenApiParameter(
+            name="return_path",
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description="Path to return to after linking",
+        ),
+    ],
+    responses={
+        200: build_success_envelope_serializer(
+            "GitHubAuthorizeResponse",
+            inline_serializer("GitHubAuthorizeUrl", fields={"url": serializers.URLField()}),
+        ),
+        302: OpenApiResponse(description="Redirect to GitHub OAuth URL"),
+        400: build_error_envelope_serializer("GitHubAuthorizeError"),
+        401: build_error_envelope_serializer("GitHubAuthorizeAuthError"),
+    },
+)
 class GitHubAuthorizeView(APIView):
     permission_classes = [AllowAny]
 
@@ -293,6 +450,16 @@ class GitHubAuthorizeView(APIView):
         return redirect(url)
 
 
+@extend_schema(
+    tags=["Auth"],
+    parameters=[
+        OpenApiParameter(name="code", type=str, location=OpenApiParameter.QUERY, required=True, description="Authorization code from GitHub"),
+        OpenApiParameter(name="state", type=str, location=OpenApiParameter.QUERY, required=True, description="State parameter for CSRF validation"),
+    ],
+    responses={
+        302: OpenApiResponse(description="Redirect to frontend with access/refresh tokens or error"),
+    },
+)
 class GitHubCallbackView(APIView):
     permission_classes = [AllowAny]
 
@@ -457,8 +624,16 @@ class GitHubCallbackView(APIView):
         )
 
 
+@extend_schema(
+    tags=["Auth"],
+    responses={
+        200: build_success_envelope_serializer("GitHubUnlinkResponse", UserSerializer),
+        400: build_error_envelope_serializer("GitHubUnlinkError"),
+    },
+)
 class GitHubUnlinkView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = serializers.Serializer
 
     def post(self, request):
         user = request.user

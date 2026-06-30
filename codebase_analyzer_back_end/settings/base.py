@@ -236,11 +236,26 @@ GITHUB_OAUTH_CLIENT_ID = get_env("GITHUB_CLIENT_ID", "")
 GITHUB_OAUTH_CLIENT_SECRET = get_env("GITHUB_CLIENT_SECRET", "")
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Product And Order Management API",
-    "DESCRIPTION": "Production-ready Django REST Framework API for users, products, and orders.",
+    "TITLE": "Codebase Analyzer API",
+    "DESCRIPTION": "REST API for indexing, searching, and querying codebases using vector embeddings and LLMs.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
+    "SCHEMA_PATH_PREFIX": r"/api/",
+    "SWAGGER_UI_SETTINGS": {
+        "deepLinking": True,
+        "persistAuthorization": True,
+    },
+    "SECURITY": [
+        {"Bearer": []},
+    ],
+    "TAGS": [
+        {"name": "Auth", "description": "Authentication, registration, OAuth, and password management"},
+        {"name": "Chat", "description": "Chat sessions and codebase querying"},
+        {"name": "GitHub", "description": "GitHub repository integration and management"},
+        {"name": "Embeddings", "description": "Codebase indexing and embedding"},
+        {"name": "Health", "description": "System health checks"},
+    ],
 }
 
 SIMPLE_JWT = build_simple_jwt(

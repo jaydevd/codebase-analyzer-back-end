@@ -4,8 +4,45 @@ import django
 from django.db import connection, connections
 from django.http import JsonResponse
 from django.conf import settings
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers
 
 
+@extend_schema(
+    tags=["Health"],
+    responses={
+        200: inline_serializer(
+            "HealthCheckResponse",
+            fields={
+                "status": serializers.CharField(),
+                "checks": inline_serializer(
+                    "HealthCheckDetails",
+                    fields={
+                        "database": serializers.CharField(),
+                        "redis": serializers.CharField(required=False),
+                    },
+                ),
+                "uptime": serializers.FloatField(),
+                "response_time_ms": serializers.FloatField(),
+            },
+        ),
+        503: inline_serializer(
+            "HealthCheckUnhealthyResponse",
+            fields={
+                "status": serializers.CharField(),
+                "checks": inline_serializer(
+                    "HealthCheckDetails",
+                    fields={
+                        "database": serializers.CharField(),
+                        "redis": serializers.CharField(required=False),
+                    },
+                ),
+                "uptime": serializers.FloatField(),
+                "response_time_ms": serializers.FloatField(),
+            },
+        ),
+    },
+)
 def health_check(request):
     start = time.time()
 

@@ -4,13 +4,23 @@ import secrets
 
 from django.conf import settings
 from django.shortcuts import redirect, get_object_or_404
-from rest_framework import status
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    inline_serializer,
+)
+from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from requests.exceptions import RequestException
 
 from auth.models import User
 from common.responses import error_response, success_response
+from common.swagger import (
+    build_success_envelope_serializer,
+    build_error_envelope_serializer,
+)
 from github.models import GithubRepos, RepoBranch, BranchScan
 from github.serializers import (
     GitHubCallbackQuerySerializer,
@@ -25,6 +35,16 @@ logger = logging.getLogger(__name__)
 service = GitHubAppService()
 
 
+@extend_schema(
+    tags=["GitHub"],
+    responses={
+        200: build_success_envelope_serializer(
+            "GitHubInstallUrlResponse",
+            inline_serializer("InstallUrlData", fields={"url": serializers.URLField()}),
+        ),
+        500: build_error_envelope_serializer("GitHubInstallUrlError"),
+    },
+)
 class GitHubInstallUrlView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -44,6 +64,17 @@ class GitHubInstallUrlView(APIView):
         return success_response("GitHub installation URL generated.", data={"url": install_url})
 
 
+@extend_schema(
+    tags=["GitHub"],
+    parameters=[
+        OpenApiParameter(name="state", type=str, location=OpenApiParameter.QUERY, required=True, description="Installation state token"),
+        OpenApiParameter(name="installation_id", type=int, location=OpenApiParameter.QUERY, required=True, description="GitHub App installation ID"),
+        OpenApiParameter(name="setup_action", type=str, location=OpenApiParameter.QUERY, required=False, description="Setup action from GitHub"),
+    ],
+    responses={
+        302: OpenApiResponse(description="Redirect to frontend with success/error"),
+    },
+)
 class GitHubCallbackView(APIView):
     permission_classes = [AllowAny]
 
@@ -93,6 +124,27 @@ class GitHubCallbackView(APIView):
         return f"{settings.FRONTEND_URL}/auth/callback{suffix}"
 
 
+_repo_item_serializer = inline_serializer(
+    "RepoItem",
+    fields={
+        "id": serializers.IntegerField(),
+        "name": serializers.CharField(),
+        "full_name": serializers.CharField(),
+        "url": serializers.URLField(),
+        "private": serializers.BooleanField(),
+        "default_branch": serializers.CharField(),
+        "status": serializers.CharField(),
+    },
+)
+
+@extend_schema(
+    tags=["GitHub"],
+    responses={
+        200: build_success_envelope_serializer("ListReposResponse", _repo_item_serializer),
+        404: build_error_envelope_serializer("ListReposNotFound"),
+        502: build_error_envelope_serializer("ListReposBadGateway"),
+    },
+)
 class ListReposView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -144,6 +196,18 @@ class ListReposView(APIView):
         return success_response("GitHub repositories fetched successfully.", data=data)
 
 
+@extend_schema(
+    tags=["GitHub"],
+    request=inline_serializer("WebhookPayload", fields={}),
+    parameters=[
+        OpenApiParameter(name="X-Hub-Signature-256", type=str, location=OpenApiParameter.HEADER, required=True, description="HMAC-SHA256 webhook signature"),
+        OpenApiParameter(name="X-GitHub-Event", type=str, location=OpenApiParameter.HEADER, required=True, description="GitHub webhook event type"),
+    ],
+    responses={
+        200: build_success_envelope_serializer("WebhookResponse"),
+        401: build_error_envelope_serializer("WebhookAuthError"),
+    },
+)
 class GitHubWebhookView(APIView):
     permission_classes = [AllowAny]
 
@@ -290,6 +354,16 @@ class GitHubWebhookView(APIView):
         return success_response("GitHub webhook received.")
 
 
+@extend_schema(
+    tags=["GitHub"],
+    request=DownloadRepoSerializer,
+    responses={
+        200: build_success_envelope_serializer("DownloadRepoResponse"),
+        400: build_error_envelope_serializer("DownloadRepoError"),
+        404: build_error_envelope_serializer("DownloadRepoNotFound"),
+        502: build_error_envelope_serializer("DownloadRepoBadGateway"),
+    },
+)
 class DownloadRepo(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = DownloadRepoSerializer
@@ -326,6 +400,17 @@ class DownloadRepo(APIView):
         return success_response("GitHub repo downloaded successfully.")
 
 
+@extend_schema(
+    tags=["GitHub"],
+    parameters=[
+        OpenApiParameter(name="repo", type=str, location=OpenApiParameter.PATH, required=True, description="Repository name (case-insensitive)"),
+    ],
+    responses={
+        200: build_success_envelope_serializer("ListBranchesResponse"),
+        404: build_error_envelope_serializer("ListBranchesNotFound"),
+        502: build_error_envelope_serializer("ListBranchesBadGateway"),
+    },
+)
 class ListRepoBranchesView(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = [BranchListSerializer]
@@ -357,6 +442,15 @@ class ListRepoBranchesView(APIView):
         return success_response(message="Branches listed successfully", data=branches)
 
 
+@extend_schema(
+    tags=["GitHub"],
+    parameters=[
+        OpenApiParameter(name="query", type=str, location=OpenApiParameter.QUERY, required=False, description="Search term for repo name (case-insensitive contains)"),
+    ],
+    responses={
+        200: build_success_envelope_serializer("SearchReposResponse", _repo_item_serializer),
+    },
+)
 class SearchReposView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -382,8 +476,16 @@ class SearchReposView(APIView):
         return success_response(message="Repos found", data=data)
 
 
+@extend_schema(
+    tags=["GitHub"],
+    responses={
+        200: build_success_envelope_serializer("DisconnectResponse"),
+        400: build_error_envelope_serializer("DisconnectError"),
+    },
+)
 class GitHubDisconnectView(APIView):
     permission_classes = [IsAuthenticated]
+    serializer_class = serializers.Serializer
 
     def post(self, request):
         user = request.user
@@ -407,6 +509,34 @@ class GitHubDisconnectView(APIView):
         return success_response("GitHub repositories disconnected successfully.")
 
 
+_scan_report_branch_serializer = inline_serializer(
+    "ScanReportBranchData",
+    fields={
+        "branch": serializers.CharField(),
+        "status": serializers.CharField(),
+        "last_indexed_at": serializers.IntegerField(allow_null=True),
+        "previous_scans": inline_serializer(
+            "PreviousScanData",
+            fields={
+                "commit_url": serializers.URLField(),
+                "commit_sha": serializers.CharField(),
+                "indexed_at": serializers.IntegerField(),
+            },
+            many=True,
+        ),
+    },
+)
+
+@extend_schema(
+    tags=["GitHub"],
+    parameters=[
+        OpenApiParameter(name="repo_id", type=int, location=OpenApiParameter.PATH, required=True, description="GitHub repository ID"),
+    ],
+    responses={
+        200: build_success_envelope_serializer("ScanReportResponse", _scan_report_branch_serializer),
+        404: build_error_envelope_serializer("ScanReportNotFound"),
+    },
+)
 class RepoScanReportView(APIView):
     permission_classes = [IsAuthenticated]
 
