@@ -8,7 +8,7 @@ import tiktoken
 
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct, Filter,
-    FieldCondition, MatchValue
+    FieldCondition, MatchValue, PayloadSchemaType
 )
 import hashlib
 import uuid
@@ -50,6 +50,20 @@ class EmbeddingService:
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
         )
         logger.info("Created collection: %s", QDRANT_COLLECTION)
+
+    self.ensure_payload_indexes()
+
+  def ensure_payload_indexes(self):
+    collection_info = qdrant.get_collection(QDRANT_COLLECTION)
+    existing_indexes = set(collection_info.payload_schema.keys())
+    required_indexes = {"repo", "branch", "commit_sha"}
+    for field in required_indexes - existing_indexes:
+        qdrant.create_payload_index(
+            collection_name=QDRANT_COLLECTION,
+            field_name=field,
+            field_schema=PayloadSchemaType.KEYWORD,
+        )
+        logger.info("Created payload index on '%s'", field)
 
 
   def stable_id(self, repo: str, file_path: str, chunk_index: int) -> str:
@@ -131,6 +145,7 @@ class EmbeddingService:
     return [e for e in all_blobs if self.should_index(e)]
 
   def get_indexed_blob_shas(self, owner: str, repo: str, branch: str, commit_sha: str) -> set[str]:
+    self.ensure_collection()
     existing_shas = set()
     next_offset = None
     while True:
@@ -496,10 +511,12 @@ def embed_batch_task(self, batch, owner, repo, branch, commit_sha, blob_sha_map)
         texts = [c['text'] for c in batch]
         tokens = rate_limiter.estimate_tokens(texts)
 
-        wait_time = rate_limiter.calculate_wait_time(tokens)
-        if wait_time > 0:
-            logger.info("Rate limit: delaying batch by %.1fs (tokens=%s)", wait_time, tokens)
-            raise self.retry(countdown=wait_time)
+        while True:
+            wait_time = rate_limiter.calculate_wait_time(tokens)
+            if wait_time <= 0:
+                break
+            logger.info("Rate limit: waiting %.1fs (tokens=%s)", wait_time, tokens)
+            time.sleep(wait_time)
 
         rate_limiter.consume(tokens)
 
