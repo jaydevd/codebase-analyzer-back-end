@@ -27,6 +27,7 @@ from auth.serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     RegisterSerializer,
+    SetPasswordSerializer,
     UpdateProfileSerializer,
     UserSerializer,
 )
@@ -213,6 +214,27 @@ class ProfileView(generics.RetrieveUpdateAPIView):
         ChatSession.objects.filter(user_id=user).update(is_deleted=True)
         GithubRepos.objects.filter(user_id=user).update(is_deleted=True)
         return success_response("Account deleted successfully.")
+
+
+@extend_schema(
+    tags=["Auth"],
+    request=SetPasswordSerializer,
+    responses={
+        200: build_success_envelope_serializer("SetPasswordResponse"),
+        400: build_error_envelope_serializer("SetPasswordError"),
+    },
+)
+class SetPasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = SetPasswordSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        user = request.user
+        user.set_password(serializer.validated_data["new_password"])
+        user.save(update_fields=["password", "updated_at"])
+        AuthEmailService.send_password_changed_email(user)
+        return success_response("Password set successfully.")
 
 
 @extend_schema(

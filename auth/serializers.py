@@ -14,6 +14,7 @@ class UserSerializer(serializers.ModelSerializer):
     github_username = serializers.SerializerMethodField()
     is_github_login_linked = serializers.SerializerMethodField()
     is_github_repo_connected = serializers.SerializerMethodField()
+    has_password = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -36,6 +37,7 @@ class UserSerializer(serializers.ModelSerializer):
             "google_id",
             "github_oauth_id",
             "avatar_url",
+            "has_password",
         )
         read_only_fields = (
             "id",
@@ -61,6 +63,10 @@ class UserSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.BooleanField())
     def get_is_github_repo_connected(self, obj):
         return obj.is_github_repo_connected
+
+    @extend_schema_field(serializers.BooleanField())
+    def get_has_password(self, obj):
+        return obj.has_usable_password()
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -187,6 +193,27 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             return User.objects.filter(pk=user_id, is_active=True).first()
         except (TypeError, ValueError, OverflowError):
             return None
+
+
+class SetPasswordSerializer(serializers.Serializer):
+    new_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    default_error_messages = {
+        "not_oauth_account": "This account was not created via Google or GitHub. Use the change-password endpoint instead.",
+        "already_has_password": "This account already has a password set.",
+    }
+
+    def validate_new_password(self, value):
+        user = self.context["request"].user
+
+        if not user.google_id and not user.github_oauth_id:
+            self.fail("not_oauth_account")
+
+        if user.has_usable_password():
+            self.fail("already_has_password")
+
+        password_validation.validate_password(value, user)
+        return value
 
 
 class GitHubOAuthCallbackQuerySerializer(serializers.Serializer):

@@ -20,7 +20,8 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from codebase_analyzer_back_end.views import health_check
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    path("django-admin/", admin.site.urls),
+    path("admin/", include("admin_api.urls")),
     path("auth/", include("auth.urls")),
     path("api/github/", include("github.urls")),
     path("embed/", include("embeddings.urls")),
