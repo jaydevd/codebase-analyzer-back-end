@@ -9,7 +9,7 @@ from common.swagger import (
     build_success_envelope_serializer,
     build_error_envelope_serializer,
 )
-from github.models import GithubRepos, RepoBranch, RepoIndexStatus, BranchScan
+from github.models import GithubRepos, RepoBranch, RepoIndexStatus, BranchScan, BranchScanStatus
 from github.services.github_app import github_service
 from auth.models import User
 
@@ -77,7 +77,7 @@ class IndexRepoView(APIView):
             repo_branch=repo_branch,
             commit_sha=commit_sha,
             commit_url=commit_url,
-            status=RepoIndexStatus.SCANNING,
+            status=BranchScanStatus.SCANNING,
             started_at=get_unix_timestamp(),
         )
 

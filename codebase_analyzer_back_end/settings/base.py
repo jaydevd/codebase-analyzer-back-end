@@ -91,7 +91,8 @@ INSTALLED_APPS = [
     "auth.apps.AuthConfig",
     "github",
     "embeddings",
-    "core"
+    "core",
+    "admin_api",
 ]
 
 MIDDLEWARE = [

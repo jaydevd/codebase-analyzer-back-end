@@ -341,6 +341,88 @@ class AuthAPITestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertIn("error=github_login_in_use", response.url)
 
+    def test_set_password_requires_authentication(self):
+        response = self.client.post("/auth/set-password/", {"new_password": "NewPass123!"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def create_oauth_user(self, provider="google", **overrides):
+        payload = {
+            "email": f"{provider}@example.com",
+            "first_name": "OAuth",
+            "last_name": "User",
+        }
+        payload.update(overrides)
+        user = User(**payload)
+        if provider == "google":
+            user.google_id = "google-123"
+        else:
+            user.github_oauth_id = 456
+        user.set_unusable_password()
+        user.save()
+        return user
+
+    def test_set_password_success_for_google_user(self):
+        user = self.create_oauth_user(provider="google")
+        refresh = RefreshToken.for_user(user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
+
+        response = self.client.post(
+            "/auth/set-password/",
+            {"new_password": "NewStrongPass123!"},
+            format="json",
+        )
+
+        user.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(user.has_usable_password())
+        self.assertTrue(user.check_password("NewStrongPass123!"))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("password was changed", mail.outbox[0].subject)
+
+    def test_set_password_success_for_github_user(self):
+        user = self.create_oauth_user(provider="github")
+        refresh = RefreshToken.for_user(user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
+
+        response = self.client.post(
+            "/auth/set-password/",
+            {"new_password": "NewStrongPass123!"},
+            format="json",
+        )
+
+        user.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(user.check_password("NewStrongPass123!"))
+
+    def test_set_password_rejects_email_password_user(self):
+        user, _ = self.authenticate()
+
+        response = self.client.post(
+            "/auth/set-password/",
+            {"new_password": "NewStrongPass123!"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("not_oauth_account", str(response.data))
+
+    def test_set_password_rejects_user_with_existing_password(self):
+        user = self.create_oauth_user(provider="google")
+        user.set_password("ExistingPass123!")
+        user.save()
+        refresh = RefreshToken.for_user(user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
+
+        response = self.client.post(
+            "/auth/set-password/",
+            {"new_password": "NewStrongPass123!"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already_has_password", str(response.data))
+
+
     @patch("auth.views.GitHubOAuthService.get_user_info")
     @patch("auth.views.GitHubOAuthService.get_verified_primary_email")
     @patch("auth.views.GitHubOAuthService.exchange_code_for_token")

@@ -295,7 +295,7 @@ def _mark_index_success(repo_id, branch, commit_sha, scan_id):
     )
     if scan_id:
         BranchScan.objects.filter(id=scan_id).update(
-            status=RepoIndexStatus.SCANNED,
+            status=BranchScanStatus.SCANNED,
             completed_at=now,
         )
     logger.info("Indexing complete for repo=%s branch=%s", repo_id, branch)
@@ -309,7 +309,7 @@ def _mark_index_failed(repo_id, branch, scan_id, error_message, error_type="Inde
     )
     if scan_id:
         BranchScan.objects.filter(id=scan_id).update(
-            status=RepoIndexStatus.FAILED,
+            status=BranchScanStatus.FAILED,
             completed_at=now,
         )
         ScanError.objects.create(
@@ -422,7 +422,7 @@ def index_branch_task(self, owner, repo, branch, commit_sha, tree_response, inst
         )
         if scan_id:
             BranchScan.objects.filter(id=scan_id).update(
-                status=RepoIndexStatus.INDEXING,
+                status=BranchScanStatus.INDEXING,
             )
 
         logger.info(
